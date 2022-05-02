@@ -1,26 +1,26 @@
 .. SPDX-License-Identifier: GPL-2.0
+# amd apml modules (apml_sbtsi and apml_sbrmi)
 
-# AMD APML modules (apml_sbtsi and apml_sbrmi)
-
-amd-apml: APML (over i2c) interface modules for BMC
+amd-apml: APML interface drivers for BMC
 
 EPYC processors from AMD provide APML interface for
 BMC users to monitor and configure the system parameters
 via the Advanced Platform Management List (APML) interface
 defined in EPYC processor PPR.
 
-This chapter defines custom protocols over i2c bus
+This chapter defines custom protocols over i2c/i3c bus
   - Mailbox
   - CPUID [RO]
   - MCA MSR {RO]
   - RMI/TSI register [RW]
 
-module_i2c based sbrmi and sbtsi modules, which are probed as
-i2c client devices, depending on the platforms DTS.
+module_i2c_i3c based sbrmi and sbtsi modules, which
+are probed as i2c or i3c client devices, depending on the
+platforms DTS.
 
 https://developer.amd.com/resources/epyc-resources/epyc-specifications
 
-APMl library provides C API for the user space application on top of this
+APMl library provides C API fo the user space application on top of this
 module.
 
 
@@ -32,10 +32,14 @@ third-generation AMD EPYC processors (codenamed "Milan")) or later
 CPUs. Using the amd apml modules on earlier CPUs could produce unexpected
 results, and may cause the processor to operate outside of your motherboard
 or system specifications. Correspondingly, defaults to only executing on
-AMD Family 19h Model (0h ~ Fh & 30h ~ 3Fh) server line of processors.
+AMD Family 19h Model (0h ~ 1Fh & 30h ~ 3Fh) server line of processors.
 
 Interface
 ---------
+
+Both apml_sbtsi and apml_sbrmi modules register a misc_device
+to provide ioctl interface to user space, allowing them
+to run these custom protocols.
 
 apml_sbtsi module registers hwmon sensors for monitoring
 current temperature, managing max and min thresholds.

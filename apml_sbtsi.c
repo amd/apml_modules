@@ -1,21 +1,32 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * sbtsi_temp.c - hwmon driver for a SBI Temperature Sensor Interface (SB-TSI)
+ * apml_sbtsi.c - hwmon driver for a SBI Temperature Sensor Interface (SB-TSI)
  *                compliant AMD SoC temperature device.
+ * 		   Also register to misc driver with an IOCTL.
  *
  * Copyright (c) 2020, Google Inc.
  * Copyright (c) 2020, Kun Yi <kunyi@google.com>
+ * Copyright (C) 2022 Advanced Micro Devices, Inc.
  */
 
 #include <linux/err.h>
-#include <linux/i2c.h>
-#include <linux/init.h>
+#include <linux/fs.h>
 #include <linux/hwmon.h>
+#include <linux/i3c/device.h>
+#include <linux/i3c/master.h>
+#include <linux/init.h>
+#include <linux/miscdevice.h>
 #include <linux/module.h>
+#include <linux/minmax.h>
 #include <linux/mutex.h>
 #include <linux/of_device.h>
 #include <linux/of.h>
+#include <linux/regmap.h>
 
+#include "amd-apml.h"
+
+#define SOCK_0_ADDR	0x4C
+#define SOCK_1_ADDR	0x48
 /*
  * SB-TSI registers only support SMBus byte data access. "_INT" registers are
  * the integer part of a temperature value or limit, and "_DEC" registers are
@@ -35,11 +46,26 @@
 #define SBTSI_TEMP_MIN	0
 #define SBTSI_TEMP_MAX	255875
 
-/* Each client has this additional data */
-struct sbtsi_data {
-	struct i2c_client *client;
+/*
+ * SBTSI_STEP_INC Fractional portion of temperature
+ * One increment of these bits is equivalent to a step of 0.125 °C
+ *
+ * SBTSI_INT_OFFSET Integer offset for temperature value
+ *
+ * SBTSI_DEC_OFFSET offset for decimal bits in register[7:5]
+ *
+ * SBTSI_DEC_MASK Mask for decimal value
+ */
+#define SBTSI_STEP_INC		125
+#define SBTSI_INT_OFFSET	3
+#define SBTSI_DEC_OFFSET	5
+#define SBTSI_DEC_MASK		0x7
+
+struct apml_sbtsi_device {
+	struct miscdevice sbtsi_misc_dev;
+	struct regmap *regmap;
 	struct mutex lock;
-};
+} __packed;
 
 /*
  * From SB-TSI spec: CPU temperature readings and limit registers encode the
@@ -54,7 +80,8 @@ struct sbtsi_data {
  */
 static inline int sbtsi_reg_to_mc(s32 integer, s32 decimal)
 {
-	return ((integer << 3) + (decimal >> 5)) * 125;
+	return ((integer << SBTSI_INT_OFFSET) +
+	       (decimal >> SBTSI_DEC_OFFSET)) * SBTSI_STEP_INC;
 }
 
 /*
@@ -65,17 +92,17 @@ static inline int sbtsi_reg_to_mc(s32 integer, s32 decimal)
  */
 static inline void sbtsi_mc_to_reg(s32 temp, u8 *integer, u8 *decimal)
 {
-	temp /= 125;
-	*integer = temp >> 3;
-	*decimal = (temp & 0x7) << 5;
+	temp /= SBTSI_STEP_INC;
+	*integer = temp >> SBTSI_INT_OFFSET;
+	*decimal = (temp & SBTSI_DEC_MASK) << SBTSI_DEC_OFFSET;
 }
 
 static int sbtsi_read(struct device *dev, enum hwmon_sensor_types type,
 		      u32 attr, int channel, long *val)
 {
-	struct sbtsi_data *data = dev_get_drvdata(dev);
-	s32 temp_int, temp_dec;
-	int err;
+	struct apml_sbtsi_device *tsi_dev = dev_get_drvdata(dev);
+	unsigned int temp_int, temp_dec, cfg;
+	int ret;
 
 	switch (attr) {
 	case hwmon_temp_input:
@@ -86,41 +113,38 @@ static int sbtsi_read(struct device *dev, enum hwmon_sensor_types type,
 		 * so integer part should be read first. If bit == 1, read
 		 * order should be reversed.
 		 */
-		err = i2c_smbus_read_byte_data(data->client, SBTSI_REG_CONFIG);
-		if (err < 0)
-			return err;
+		ret = regmap_read(tsi_dev->regmap, SBTSI_REG_CONFIG, &cfg);
+		if (ret < 0)
+			return ret;
 
-		mutex_lock(&data->lock);
-		if (err & BIT(SBTSI_CONFIG_READ_ORDER_SHIFT)) {
-			temp_dec = i2c_smbus_read_byte_data(data->client, SBTSI_REG_TEMP_DEC);
-			temp_int = i2c_smbus_read_byte_data(data->client, SBTSI_REG_TEMP_INT);
+		mutex_lock(&tsi_dev->lock);
+		if (cfg & BIT(SBTSI_CONFIG_READ_ORDER_SHIFT)) {
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_DEC, &temp_dec);
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_INT, &temp_int);
 		} else {
-			temp_int = i2c_smbus_read_byte_data(data->client, SBTSI_REG_TEMP_INT);
-			temp_dec = i2c_smbus_read_byte_data(data->client, SBTSI_REG_TEMP_DEC);
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_INT, &temp_int);
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_DEC, &temp_dec);
 		}
-		mutex_unlock(&data->lock);
+		mutex_unlock(&tsi_dev->lock);
 		break;
 	case hwmon_temp_max:
-		mutex_lock(&data->lock);
-		temp_int = i2c_smbus_read_byte_data(data->client, SBTSI_REG_TEMP_HIGH_INT);
-		temp_dec = i2c_smbus_read_byte_data(data->client, SBTSI_REG_TEMP_HIGH_DEC);
-		mutex_unlock(&data->lock);
+		mutex_lock(&tsi_dev->lock);
+		ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_HIGH_INT, &temp_int);
+		ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_HIGH_DEC, &temp_dec);
+		mutex_unlock(&tsi_dev->lock);
 		break;
 	case hwmon_temp_min:
-		mutex_lock(&data->lock);
-		temp_int = i2c_smbus_read_byte_data(data->client, SBTSI_REG_TEMP_LOW_INT);
-		temp_dec = i2c_smbus_read_byte_data(data->client, SBTSI_REG_TEMP_LOW_DEC);
-		mutex_unlock(&data->lock);
+		mutex_lock(&tsi_dev->lock);
+		ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_LOW_INT, &temp_int);
+		ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_LOW_DEC, &temp_dec);
+		mutex_unlock(&tsi_dev->lock);
 		break;
 	default:
 		return -EINVAL;
 	}
 
-
-	if (temp_int < 0)
-		return temp_int;
-	if (temp_dec < 0)
-		return temp_dec;
+	if (ret < 0)
+		return ret;
 
 	*val = sbtsi_reg_to_mc(temp_int, temp_dec);
 
@@ -130,9 +154,9 @@ static int sbtsi_read(struct device *dev, enum hwmon_sensor_types type,
 static int sbtsi_write(struct device *dev, enum hwmon_sensor_types type,
 		       u32 attr, int channel, long val)
 {
-	struct sbtsi_data *data = dev_get_drvdata(dev);
+	struct apml_sbtsi_device *tsi_dev = dev_get_drvdata(dev);
+	unsigned int temp_int, temp_dec;
 	int reg_int, reg_dec, err;
-	u8 temp_int, temp_dec;
 
 	switch (attr) {
 	case hwmon_temp_max:
@@ -148,16 +172,16 @@ static int sbtsi_write(struct device *dev, enum hwmon_sensor_types type,
 	}
 
 	val = clamp_val(val, SBTSI_TEMP_MIN, SBTSI_TEMP_MAX);
-	sbtsi_mc_to_reg(val, &temp_int, &temp_dec);
+	sbtsi_mc_to_reg(val, (u8 *)&temp_int, (u8 *)&temp_dec);
 
-	mutex_lock(&data->lock);
-	err = i2c_smbus_write_byte_data(data->client, reg_int, temp_int);
+	mutex_lock(&tsi_dev->lock);
+	err = regmap_write(tsi_dev->regmap, reg_int, temp_int);
 	if (err)
 		goto exit;
 
-	err = i2c_smbus_write_byte_data(data->client, reg_dec, temp_dec);
+	err = regmap_write(tsi_dev->regmap, reg_dec, temp_dec);
 exit:
-	mutex_unlock(&data->lock);
+	mutex_unlock(&tsi_dev->lock);
 	return err;
 }
 
@@ -199,25 +223,186 @@ static const struct hwmon_chip_info sbtsi_chip_info = {
 	.info = sbtsi_info,
 };
 
-static int sbtsi_probe(struct i2c_client *client,
-		       const struct i2c_device_id *id)
+static long sbtsi_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
+{
+	int __user *arguser = (int  __user *)arg;
+	struct apml_message msg = { 0 };
+	struct apml_sbtsi_device *tsi_dev;
+	int ret;
+
+	if (copy_struct_from_user(&msg, sizeof(msg), arguser, sizeof(struct apml_message)))
+		return -EFAULT;
+
+	if (msg.cmd != APML_REG)
+		return -EINVAL;
+
+	tsi_dev = container_of(fp->private_data, struct apml_sbtsi_device, sbtsi_misc_dev);
+	if (!tsi_dev)
+		return -EFAULT;
+
+	mutex_lock(&tsi_dev->lock);
+
+	if (!msg.data_in.reg_in[RD_FLAG_INDEX]) {
+		ret = regmap_write(tsi_dev->regmap,
+				   msg.data_in.reg_in[REG_OFF_INDEX],
+				   msg.data_in.reg_in[REG_VAL_INDEX]);
+	} else {
+		ret = regmap_read(tsi_dev->regmap,
+				  msg.data_in.reg_in[REG_OFF_INDEX],
+				  (int *)&msg.data_out.reg_out[RD_WR_DATA_INDEX]);
+		if (ret)
+			goto out;
+
+		if (copy_to_user(arguser, &msg, sizeof(struct apml_message)))
+			ret = -EFAULT;
+	}
+out:
+	mutex_unlock(&tsi_dev->lock);
+	return ret;
+}
+
+static const struct file_operations sbtsi_fops = {
+	.owner		= THIS_MODULE,
+	.unlocked_ioctl	= sbtsi_ioctl,
+	.compat_ioctl	= sbtsi_ioctl,
+};
+
+static int create_misc_tsi_device(struct apml_sbtsi_device *tsi_dev,
+				  struct device *dev, int id)
+{
+	int ret;
+
+	tsi_dev->sbtsi_misc_dev.name		= devm_kasprintf(dev, GFP_KERNEL, "apml_tsi%d", id);
+	tsi_dev->sbtsi_misc_dev.minor		= MISC_DYNAMIC_MINOR;
+	tsi_dev->sbtsi_misc_dev.fops		= &sbtsi_fops;
+	tsi_dev->sbtsi_misc_dev.parent		= dev;
+	tsi_dev->sbtsi_misc_dev.nodename	= devm_kasprintf(dev, GFP_KERNEL, "sbtsi%d", id);
+	tsi_dev->sbtsi_misc_dev.mode		= 0600;
+
+	ret = misc_register(&tsi_dev->sbtsi_misc_dev);
+	if (ret)
+		return ret;
+
+	dev_info(dev, "register %s device\n", tsi_dev->sbtsi_misc_dev.name);
+	return ret;
+}
+
+static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
+{
+	struct device *dev = &i3cdev->dev;
+	struct device *hwmon_dev;
+	struct apml_sbtsi_device *tsi_dev;
+	struct regmap_config sbtsi_i3c_regmap_config = {
+		.reg_bits = 8,
+		.val_bits = 8,
+	};
+	struct regmap *regmap;
+	int id;
+
+	regmap = devm_regmap_init_i3c(i3cdev, &sbtsi_i3c_regmap_config);
+	if (IS_ERR(regmap)) {
+		dev_err(&i3cdev->dev, "Failed to register i3c regmap %d\n",
+			(int)PTR_ERR(regmap));
+		return PTR_ERR(regmap);
+	}
+
+	tsi_dev = devm_kzalloc(dev, sizeof(struct apml_sbtsi_device), GFP_KERNEL);
+	if (!tsi_dev)
+		return -ENOMEM;
+
+	tsi_dev->regmap = regmap;
+	mutex_init(&tsi_dev->lock);
+
+	dev_set_drvdata(dev, (void *)tsi_dev);
+	hwmon_dev = devm_hwmon_device_register_with_info(dev, "sbtsi_i3c", tsi_dev,
+							 &sbtsi_chip_info, NULL);
+
+	if (!hwmon_dev)
+		return PTR_ERR_OR_ZERO(hwmon_dev);
+
+	if (i3cdev->desc->info.static_addr == SOCK_0_ADDR)
+		id = 0;
+	if (i3cdev->desc->info.static_addr == SOCK_1_ADDR)
+		id = 1;
+
+	return create_misc_tsi_device(tsi_dev, dev, id);
+}
+
+static int sbtsi_i2c_probe(struct i2c_client *client,
+			   const struct i2c_device_id *tsi_id)
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
-	struct sbtsi_data *data;
+	struct apml_sbtsi_device *tsi_dev;
+	struct regmap_config sbtsi_i2c_regmap_config = {
+		.reg_bits = 8,
+		.val_bits = 8,
+	};
+	int id;
 
-	data = devm_kzalloc(dev, sizeof(struct sbtsi_data), GFP_KERNEL);
-	if (!data)
+	tsi_dev = devm_kzalloc(dev, sizeof(struct apml_sbtsi_device), GFP_KERNEL);
+	if (!tsi_dev)
 		return -ENOMEM;
 
-	data->client = client;
-	mutex_init(&data->lock);
+	mutex_init(&tsi_dev->lock);
+	tsi_dev->regmap = devm_regmap_init_i2c(client, &sbtsi_i2c_regmap_config);
+	if (IS_ERR(tsi_dev->regmap))
+		return PTR_ERR(tsi_dev->regmap);
 
-	hwmon_dev = devm_hwmon_device_register_with_info(dev, client->name, data, &sbtsi_chip_info,
+	dev_set_drvdata(dev, (void *)tsi_dev);
+
+	hwmon_dev = devm_hwmon_device_register_with_info(dev, client->name,
+							 tsi_dev,
+							 &sbtsi_chip_info,
 							 NULL);
 
-	return PTR_ERR_OR_ZERO(hwmon_dev);
+	if (!hwmon_dev)
+		return PTR_ERR_OR_ZERO(hwmon_dev);
+
+	if (client->addr == SOCK_0_ADDR)
+		id = 0;
+	if (client->addr == SOCK_1_ADDR)
+		id = 1;
+
+	return create_misc_tsi_device(tsi_dev, dev, id);
 }
+
+static int sbtsi_i3c_remove(struct i3c_device *i3cdev)
+{
+	struct apml_sbtsi_device *tsi_dev = dev_get_drvdata(&i3cdev->dev);
+
+	if (tsi_dev)
+		misc_deregister(&tsi_dev->sbtsi_misc_dev);
+
+	dev_info(&i3cdev->dev, "Removed sbtsi-i3c driver\n");
+	return 0;
+}
+
+static int sbtsi_i2c_remove(struct i2c_client *client)
+{
+	struct apml_sbtsi_device *tsi_dev = dev_get_drvdata(&client->dev);
+
+	if (tsi_dev)
+		misc_deregister(&tsi_dev->sbtsi_misc_dev);
+
+	dev_info(&client->dev, "Removed sbtsi driver\n");
+	return 0;
+}
+
+static const struct i3c_device_id sbtsi_i3c_id[] = {
+	I3C_DEVICE_EXTRA_INFO(0x112, 0, 0x1, NULL),
+	{}
+};
+MODULE_DEVICE_TABLE(i3c, sbtsi_i3c_id);
+
+static struct i3c_driver sbtsi_i3c_driver = {
+	.driver = {
+		.name = "sbtsi_i3c",
+	},
+	.probe = sbtsi_i3c_probe,
+	.remove = sbtsi_i3c_remove,
+	.id_table = sbtsi_i3c_id,
+};
 
 static const struct i2c_device_id sbtsi_id[] = {
 	{"sbtsi", 0},
@@ -239,11 +424,12 @@ static struct i2c_driver sbtsi_driver = {
 		.name = "sbtsi",
 		.of_match_table = of_match_ptr(sbtsi_of_match),
 	},
-	.probe = sbtsi_probe,
+	.probe = sbtsi_i2c_probe,
+	.remove = sbtsi_i2c_remove,
 	.id_table = sbtsi_id,
 };
 
-module_i2c_driver(sbtsi_driver);
+module_i3c_i2c_driver(sbtsi_i3c_driver, &sbtsi_driver)
 
 MODULE_AUTHOR("Kun Yi <kunyi@google.com>");
 MODULE_DESCRIPTION("Hwmon driver for AMD SB-TSI emulated sensor");
