@@ -26,26 +26,10 @@ struct apml_sbrmi_device {
 	u8 rev;
 } __packed;
 
-struct apml_spl_ops {
-	int (*rmi_cpuid_read)(struct apml_sbrmi_device *rmi_dev,
-			      struct apml_message *msg);
-	int (*rmi_mca_msr_read)(struct apml_sbrmi_device *rmi_dev,
-				struct apml_message *msg);
-};
-
-extern struct apml_spl_ops apml_ops;
-
-void rmi_set_apml_ops(int rev);
-
-int sbrmi_enable_alert(struct apml_sbrmi_device *rmi_dev);
-int rmi_mca_msr_read_v20(struct apml_sbrmi_device *rmi_dev,
-			 struct apml_message *msg);
-int rmi_mca_msr_read_v10(struct apml_sbrmi_device *rmi_dev,
-			 struct apml_message *msg);
-int rmi_cpuid_read_v10(struct apml_sbrmi_device *rmi_dev,
-		       struct apml_message *msg);
-int rmi_cpuid_read_v20(struct apml_sbrmi_device *rmi_dev,
-		       struct apml_message *msg);
+int rmi_mca_msr_read(struct apml_sbrmi_device *rmi_dev,
+		     struct apml_message *msg);
+int rmi_cpuid_read(struct apml_sbrmi_device *rmi_dev,
+		   struct apml_message *msg);
 int rmi_mailbox_xfer(struct apml_sbrmi_device *rmi_dev,
 		     struct apml_message *msg);
 #endif /*_AMD_APML_SBRMI_H_*/

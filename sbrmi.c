@@ -19,6 +19,7 @@
 #include <linux/of.h>
 #include <linux/fs.h>
 #include <linux/regmap.h>
+
 #include "sbrmi-common.h"
 
 #define SOCK_0_ADDR	0x3C
@@ -38,6 +39,21 @@ enum sbrmi_msg_id {
 	SBRMI_READ_PKG_PWR_LIMIT,
 	SBRMI_READ_PKG_MAX_PWR_LIMIT,
 };
+
+static int sbrmi_get_max_pwr_limit(struct apml_sbrmi_device *rmi_dev)
+{
+	struct apml_message msg = { 0 };
+	int ret = 0;
+
+	msg.cmd = SBRMI_READ_PKG_MAX_PWR_LIMIT;
+	msg.data_in.reg_in[RD_FLAG_INDEX] = 1;
+	ret = rmi_mailbox_xfer(rmi_dev, &msg);
+	if (ret < 0)
+		return ret;
+	rmi_dev->pwr_limit_max = msg.data_out.mb_out[RD_WR_DATA_INDEX];
+
+	return ret;
+}
 
 static int sbrmi_read(struct device *dev, enum hwmon_sensor_types type,
 		      u32 attr, int channel, long *val)
@@ -62,12 +78,11 @@ static int sbrmi_read(struct device *dev, enum hwmon_sensor_types type,
 		ret = rmi_mailbox_xfer(rmi_dev, &msg);
 		break;
 	case hwmon_power_cap_max:
-		if (rmi_dev->pwr_limit_max) {
-			msg.data_out.mb_out[RD_WR_DATA_INDEX] = rmi_dev->pwr_limit_max;
-		} else {
-			msg.cmd = SBRMI_READ_PKG_MAX_PWR_LIMIT;
-			ret = rmi_mailbox_xfer(rmi_dev, &msg);
+		if (!rmi_dev->pwr_limit_max) {
+			/* Cache maximum power limit */
+			ret = sbrmi_get_max_pwr_limit(rmi_dev);
 		}
+		msg.data_out.mb_out[RD_WR_DATA_INDEX] = rmi_dev->pwr_limit_max;
 		break;
 	default:
 		ret = -EINVAL;
@@ -144,38 +159,6 @@ static const struct hwmon_chip_info sbrmi_chip_info = {
 	.info = sbrmi_info,
 };
 
-static int sbrmi_get_max_pwr_limit(struct apml_sbrmi_device *rmi_dev)
-{
-	struct apml_message msg = { 0 };
-	int ret;
-
-	msg.cmd = SBRMI_READ_PKG_MAX_PWR_LIMIT;
-	msg.data_in.reg_in[RD_FLAG_INDEX] = 1;
-	ret = rmi_mailbox_xfer(rmi_dev, &msg);
-	if (ret < 0)
-		return ret;
-	rmi_dev->pwr_limit_max = msg.data_out.mb_out[RD_WR_DATA_INDEX];
-
-	return ret;
-}
-
-static int sbrmi_get_rev(struct apml_sbrmi_device *rmi_dev)
-{
-	struct apml_message msg = { 0 };
-	int ret;
-
-	msg.data_in.reg_in[REG_OFF_INDEX] = SBRMI_REV;
-	msg.data_in.reg_in[RD_FLAG_INDEX] = 1;
-	ret = regmap_read(rmi_dev->regmap,
-			  msg.data_in.reg_in[REG_OFF_INDEX],
-			  &msg.data_out.mb_out[RD_WR_DATA_INDEX]);
-	if (ret < 0)
-		return ret;
-
-	rmi_dev->rev = msg.data_out.reg_out[RD_WR_DATA_INDEX];
-	return 0;
-}
-
 static long sbrmi_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
 {
 	int __user *arguser = (int  __user *)arg;
@@ -225,12 +208,11 @@ static long sbrmi_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
 		ret = rmi_mailbox_xfer(rmi_dev, &msg);
 		break;
 	case APML_CPUID:
-		/* CPUID protocol */
-		ret = apml_ops.rmi_cpuid_read(rmi_dev, &msg);
+		ret = rmi_cpuid_read(rmi_dev, &msg);
 		break;
 	case APML_MCA_MSR:
 		/* MCAMSR protocol */
-		ret = apml_ops.rmi_mca_msr_read(rmi_dev, &msg);
+		ret = rmi_mca_msr_read(rmi_dev, &msg);
 		break;
 	case APML_REG:
 		/* REG R/W */
@@ -299,7 +281,7 @@ static int sbrmi_i2c_probe(struct i2c_client *client,
 		.reg_bits = 8,
 		.val_bits = 8,
 	};
-	int id, ret;
+	int id;
 
 	rmi_dev = devm_kzalloc(dev, sizeof(struct apml_sbrmi_device), GFP_KERNEL);
 	if (!rmi_dev)
@@ -314,17 +296,6 @@ static int sbrmi_i2c_probe(struct i2c_client *client,
 		return PTR_ERR(rmi_dev->regmap);
 
 	dev_set_drvdata(dev, (void *)rmi_dev);
-
-	ret = sbrmi_get_rev(rmi_dev);
-	if (ret < 0)
-		return ret;
-
-	rmi_set_apml_ops(rmi_dev->rev);
-
-	/* Cache maximum power limit */
-	ret = sbrmi_get_max_pwr_limit(rmi_dev);
-	if (ret < 0)
-		return ret;
 
 	hwmon_dev = devm_hwmon_device_register_with_info(dev, client->name,
 							 rmi_dev,
@@ -353,7 +324,6 @@ static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 		.val_bits = 8,
 	};
 	struct regmap *regmap;
-	int ret;
 	int id;
 
 	regmap = devm_regmap_init_i3c(i3cdev, &sbrmi_i3c_regmap_config);
@@ -372,18 +342,6 @@ static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 	mutex_init(&rmi_dev->lock);
 
 	dev_set_drvdata(dev, (void *)rmi_dev);
-
-	/* Enable alert for SB-RMI sequence */
-	ret = sbrmi_get_rev(rmi_dev);
-	if (ret < 0)
-		return ret;
-
-	rmi_set_apml_ops(rmi_dev->rev);
-
-	/* Cache maximum power limit */
-	ret = sbrmi_get_max_pwr_limit(rmi_dev);
-	if (ret < 0)
-		return ret;
 
 	hwmon_dev = devm_hwmon_device_register_with_info(dev, "sbrmi_i3c", rmi_dev,
 							 &sbrmi_chip_info, NULL);
