@@ -201,7 +201,7 @@ int rmi_mca_msr_read(struct apml_sbrmi_device *rmi_dev,
 		goto exit_unlock;
 
 	ret = regmap_write(rmi_dev->regmap, SBRMI_STATUS,
-			   hw_status | HW_ALERT_MASK);
+			   HW_ALERT_MASK);
 	if (ret < 0)
 		goto exit_unlock;
 
@@ -271,7 +271,7 @@ int rmi_cpuid_read(struct apml_sbrmi_device *rmi_dev,
 		goto exit_unlock;
 
 	ret = regmap_write(rmi_dev->regmap, SBRMI_STATUS,
-			   hw_status | HW_ALERT_MASK);
+			   HW_ALERT_MASK);
 	if (ret < 0)
 		goto exit_unlock;
 
@@ -302,7 +302,7 @@ static int esmi_oob_clear_status_alert(struct apml_sbrmi_device *rmi_dev)
 		return 0;
 
 	return regmap_write(rmi_dev->regmap, SBRMI_STATUS,
-			    sw_status | SW_ALERT_MASK);
+			    SW_ALERT_MASK);
 }
 
 int rmi_mailbox_xfer(struct apml_sbrmi_device *rmi_dev,
@@ -382,7 +382,7 @@ exit_clear_alert:
 	 * ALERT to initiator
 	 */
 	ret = regmap_write(rmi_dev->regmap, SBRMI_STATUS,
-			   sw_status | SW_ALERT_MASK);
+			   SW_ALERT_MASK);
 	if (ec) {
 		ret = -EPROTOTYPE;
 		msg->fw_ret_code = ec;
