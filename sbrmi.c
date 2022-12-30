@@ -6,6 +6,7 @@
  * Copyright (C) 2021-2022 Advanced Micro Devices, Inc.
  */
 
+#include <linux/version.h>
 #include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/hwmon.h>
@@ -357,7 +358,11 @@ static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 	return create_misc_rmi_device(rmi_dev, dev, id);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 1)
+static void sbrmi_i2c_remove(struct i2c_client *client)
+#else
 static int sbrmi_i2c_remove(struct i2c_client *client)
+#endif
 {
 	struct apml_sbrmi_device *rmi_dev = dev_get_drvdata(&client->dev);
 
@@ -365,10 +370,17 @@ static int sbrmi_i2c_remove(struct i2c_client *client)
 		misc_deregister(&rmi_dev->sbrmi_misc_dev);
 
 	dev_info(&client->dev, "Removed sbrmi driver\n");
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 1)
 	return 0;
+#endif
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 1)
+static void sbrmi_i3c_remove(struct i3c_device *i3cdev)
+#else
 static int sbrmi_i3c_remove(struct i3c_device *i3cdev)
+#endif
 {
 	struct apml_sbrmi_device *rmi_dev = dev_get_drvdata(&i3cdev->dev);
 
@@ -376,7 +388,10 @@ static int sbrmi_i3c_remove(struct i3c_device *i3cdev)
 		misc_deregister(&rmi_dev->sbrmi_misc_dev);
 
 	dev_info(&i3cdev->dev, "Removed sbrmi_i3c driver\n");
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 1)
 	return 0;
+#endif
 }
 
 static const struct i2c_device_id sbrmi_id[] = {
@@ -419,7 +434,19 @@ static struct i3c_driver sbrmi_i3c_driver = {
 	.id_table = sbrmi_i3c_id,
 };
 
-module_i3c_i2c_driver(sbrmi_i3c_driver, &sbrmi_driver)
+static int __init sbrmi_i3c_driver_init(void)
+{
+	return i3c_i2c_driver_register(&(sbrmi_i3c_driver), &sbrmi_driver);
+}
+
+module_init(sbrmi_i3c_driver_init);
+
+static void __exit sbrmi_i3c_driver_exit(void)
+{
+	i3c_i2c_driver_unregister(&(sbrmi_i3c_driver), &sbrmi_driver);
+}
+
+module_exit(sbrmi_i3c_driver_exit);
 
 MODULE_AUTHOR("Akshay Gupta <akshay.gupta@amd.com>");
 MODULE_DESCRIPTION("Hwmon driver for AMD SB-RMI emulated sensor");
