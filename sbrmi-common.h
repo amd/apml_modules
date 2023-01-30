@@ -10,11 +10,19 @@
 #include "amd-apml.h"
 
 /* Each client has this additional data */
+/* in_progress: set during any transaction, mailbox/cpuid/mcamsr/readreg,
+ * to indicate a transaction is in progress.
+ * no_new_trans: set in rmmod/unbind path to indicate,
+ * not to accept new transactions
+ */
 struct apml_sbrmi_device {
 	struct miscdevice sbrmi_misc_dev;
+	struct completion misc_fops_done;
 	struct regmap *regmap;
 	struct mutex lock;
 	u32 pwr_limit_max;
+	atomic_t in_progress;
+	atomic_t no_new_trans;
 	u8 rev;
 } __packed;
 

@@ -167,16 +167,13 @@ int rmi_mca_msr_read_v20(struct apml_sbrmi_device *rmi_dev,
 		thread -= 128;
 		val = 1;
 	}
-	mutex_lock(&rmi_dev->lock);
 	ret = regmap_write(rmi_dev->regmap, SBRMI_THREAD128CS, val);
 	if (ret < 0)
 		goto exit_unlock;
-	mutex_unlock(&rmi_dev->lock);
 
 	prepare_mca_msr_input_message(input, thread,
 				      msg->data_in.mb_in[RD_WR_DATA_INDEX]);
 
-	mutex_lock(&rmi_dev->lock);
 	ret = regmap_bulk_write(rmi_dev->regmap, CPUID_MCA_CMD,
 				&input, MSR_WR_REG_LEN);
 	if (ret < 0)
@@ -208,7 +205,6 @@ int rmi_mca_msr_read_v20(struct apml_sbrmi_device *rmi_dev,
 	msg->data_out.cpu_msr_out = output.value;
 
 exit_unlock:
-	mutex_unlock(&rmi_dev->lock);
 	return ret;
 }
 
@@ -244,17 +240,14 @@ int rmi_cpuid_read_v20(struct apml_sbrmi_device *rmi_dev,
 		thread -= 128;
 		val = 1;
 	}
-	mutex_lock(&rmi_dev->lock);
 	ret = regmap_write(rmi_dev->regmap, SBRMI_THREAD128CS, val);
 	if (ret < 0)
 		goto exit_unlock;
-	mutex_unlock(&rmi_dev->lock);
 
 	prepare_cpuid_input_message(input, thread,
 				    msg->data_in.mb_in[RD_WR_DATA_INDEX],
 				    msg->data_in.reg_in[EXT_FUNC_INDEX]);
 
-	mutex_lock(&rmi_dev->lock);
 	ret = regmap_bulk_write(rmi_dev->regmap, CPUID_MCA_CMD,
 				&input, CPUID_WR_REG_LEN);
 	if (ret < 0)
@@ -285,7 +278,6 @@ int rmi_cpuid_read_v20(struct apml_sbrmi_device *rmi_dev,
 	}
 	msg->data_out.cpu_msr_out = output.value;
 exit_unlock:
-	mutex_unlock(&rmi_dev->lock);
 	return ret;
 }
 
@@ -313,7 +305,6 @@ int rmi_mailbox_xfer(struct apml_sbrmi_device *rmi_dev,
 	int sw_status;
 	u8 byte = 0;
 
-	mutex_lock(&rmi_dev->lock);
 	msg->fw_ret_code = 0;
 
 	ret = esmi_oob_clear_status_alert(rmi_dev);
@@ -389,6 +380,5 @@ exit_clear_alert:
 		msg->fw_ret_code = ec;
 	}
 exit_unlock:
-	mutex_unlock(&rmi_dev->lock);
 	return ret;
 }
