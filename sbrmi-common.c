@@ -223,6 +223,9 @@ int rmi_mca_msr_read(struct apml_sbrmi_device *rmi_dev,
 	int ret;
 	int hw_status;
 
+	if (!rmi_dev->regmap)
+		return ENODEV;
+
 	/* cache the rev value to identify if protocol is supported or not */
 	if (!rmi_dev->rev) {
 		ret = sbrmi_get_rev(rmi_dev);
@@ -333,6 +336,9 @@ int rmi_cpuid_read(struct apml_sbrmi_device *rmi_dev,
 	struct cpu_msr_outdata output = {0};
 	int ret, hw_status;
 
+	if (!rmi_dev->regmap)
+		return ENODEV;
+
 	/* cache the rev value to identify if protocol is supported or not */
 	if (!rmi_dev->rev) {
 		ret = sbrmi_get_rev(rmi_dev);
@@ -409,6 +415,9 @@ int rmi_mailbox_xfer(struct apml_sbrmi_device *rmi_dev,
 	int i, ret;
 	int sw_status;
 	u8 byte = 0;
+
+	if (!rmi_dev->regmap)
+		return ENODEV;
 
 	msg->fw_ret_code = 0;
 
