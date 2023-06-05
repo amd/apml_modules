@@ -26,6 +26,10 @@
 /* Do not allow setting negative power limit */
 #define SBRMI_PWR_MIN	0
 
+/* Try 2 byte address size before switching to 1 byte */
+#define MAX_RETRY	5
+
+
 /* SBRMI REVISION REG */
 #define SBRMI_REV	0x0
 
@@ -351,11 +355,23 @@ static int sbrmi_i2c_reg_read(struct i2c_client *i2cdev, int reg_size, u32 *val)
 static int sbrmi_i2c_identify_reg_addr_size(struct i2c_client *i2c, u32 *size, u32 *rev)
 {
 	u32 reg_size;
-	int ret;
+	int ret, i;
 
 	reg_size = SBRMI_REG_ADDR_SIZE_TWO_BYTE;
 
-	ret = sbrmi_i2c_reg_read(i2c, reg_size, rev);
+	/*
+	 * Sending 1 byte address size in Turin cause unrecoverable error
+	 * Before trying to switch to 1 bytes, retry. 
+	 */
+	for (i = 0; i < MAX_RETRY; i++) {
+		ret = sbrmi_i2c_reg_read(i2c, reg_size, rev);
+		if (ret != I3C_I2C_MSG_XFER_SIZE) {
+			usleep_range(10000, 20000);
+			continue;
+		} else {
+			break;
+		}
+	}
 	if (ret != I3C_I2C_MSG_XFER_SIZE) {
 		reg_size = SBRMI_REG_ADDR_SIZE_DEF;
 		ret = sbrmi_i2c_reg_read(i2c, reg_size, rev);
@@ -421,10 +437,18 @@ static int sbrmi_i3c_reg_read(struct i3c_device *i3cdev, int reg_size, u32 *val)
 static int sbrmi_i3c_identify_reg_addr_size(struct i3c_device *i3cdev, u32 *size, u32 *rev)
 {
 	u32 reg_size;
-	int ret;
+	int ret, i;
 
 	reg_size = SBRMI_REG_ADDR_SIZE_TWO_BYTE;
-	ret = sbrmi_i3c_reg_read(i3cdev, reg_size, rev);
+	for (i = 0; i < MAX_RETRY; i++) {
+		ret = sbrmi_i3c_reg_read(i3cdev, reg_size, rev);
+		if (ret < 0) {
+			usleep_range(10000, 20000);
+			continue;
+		} else {
+			break;
+		}
+	}
 	if (ret < 0) {
 		reg_size = SBRMI_REG_ADDR_SIZE_DEF;
 		ret = sbrmi_i3c_reg_read(i3cdev, reg_size, rev);
