@@ -25,8 +25,6 @@
 
 #include "amd-apml.h"
 
-#define SOCK_0_ADDR	0x4C
-#define SOCK_1_ADDR	0x48
 /*
  * SB-TSI registers only support SMBus byte data access. "_INT" registers are
  * the integer part of a temperature value or limit, and "_DEC" registers are
@@ -65,6 +63,7 @@ struct apml_sbtsi_device {
 	struct miscdevice sbtsi_misc_dev;
 	struct regmap *regmap;
 	struct mutex lock;
+	u8 dev_static_addr;
 } __packed;
 
 /*
@@ -268,15 +267,17 @@ static const struct file_operations sbtsi_fops = {
 };
 
 static int create_misc_tsi_device(struct apml_sbtsi_device *tsi_dev,
-				  struct device *dev, int id)
+				  struct device *dev)
 {
 	int ret;
 
-	tsi_dev->sbtsi_misc_dev.name		= devm_kasprintf(dev, GFP_KERNEL, "apml_tsi%d", id);
+	tsi_dev->sbtsi_misc_dev.name		= devm_kasprintf(dev, GFP_KERNEL,
+						  "sbtsi-%x", tsi_dev->dev_static_addr);
 	tsi_dev->sbtsi_misc_dev.minor		= MISC_DYNAMIC_MINOR;
 	tsi_dev->sbtsi_misc_dev.fops		= &sbtsi_fops;
 	tsi_dev->sbtsi_misc_dev.parent		= dev;
-	tsi_dev->sbtsi_misc_dev.nodename	= devm_kasprintf(dev, GFP_KERNEL, "sbtsi%d", id);
+	tsi_dev->sbtsi_misc_dev.nodename	= devm_kasprintf(dev, GFP_KERNEL,
+						  "sbtsi-%x", tsi_dev->dev_static_addr);
 	tsi_dev->sbtsi_misc_dev.mode		= 0600;
 
 	ret = misc_register(&tsi_dev->sbtsi_misc_dev);
@@ -297,7 +298,6 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 		.val_bits = 8,
 	};
 	struct regmap *regmap;
-	int id;
 
 	regmap = devm_regmap_init_i3c(i3cdev, &sbtsi_i3c_regmap_config);
 	if (IS_ERR(regmap)) {
@@ -320,12 +320,10 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 	if (!hwmon_dev)
 		return PTR_ERR_OR_ZERO(hwmon_dev);
 
-	if (i3cdev->desc->info.static_addr == SOCK_0_ADDR)
-		id = 0;
-	if (i3cdev->desc->info.static_addr == SOCK_1_ADDR)
-		id = 1;
+	/* Need to verify for the static address for i3cdev */
+	tsi_dev->dev_static_addr = i3cdev->desc->info.static_addr;
 
-	return create_misc_tsi_device(tsi_dev, dev, id);
+	return create_misc_tsi_device(tsi_dev, dev);
 }
 
 static int sbtsi_i2c_probe(struct i2c_client *client,
@@ -338,7 +336,6 @@ static int sbtsi_i2c_probe(struct i2c_client *client,
 		.reg_bits = 8,
 		.val_bits = 8,
 	};
-	int id;
 
 	tsi_dev = devm_kzalloc(dev, sizeof(struct apml_sbtsi_device), GFP_KERNEL);
 	if (!tsi_dev)
@@ -359,12 +356,9 @@ static int sbtsi_i2c_probe(struct i2c_client *client,
 	if (!hwmon_dev)
 		return PTR_ERR_OR_ZERO(hwmon_dev);
 
-	if (client->addr == SOCK_0_ADDR)
-		id = 0;
-	if (client->addr == SOCK_1_ADDR)
-		id = 1;
+	tsi_dev->dev_static_addr = client->addr;
 
-	return create_misc_tsi_device(tsi_dev, dev, id);
+	return create_misc_tsi_device(tsi_dev, dev);
 }
 
 static int sbtsi_i3c_remove(struct i3c_device *i3cdev)
