@@ -22,9 +22,6 @@
 
 #include "sbrmi-common.h"
 
-#define SOCK_0_ADDR	0x3C
-#define SOCK_1_ADDR	0x38
-
 /* Do not allow setting negative power limit */
 #define SBRMI_PWR_MIN	0
 
@@ -252,15 +249,17 @@ static const struct file_operations sbrmi_fops = {
 };
 
 static int create_misc_rmi_device(struct apml_sbrmi_device *rmi_dev,
-				  struct device *dev, int id)
+				  struct device *dev)
 {
 	int ret;
 
-	rmi_dev->sbrmi_misc_dev.name		= devm_kasprintf(dev, GFP_KERNEL, "apml_rmi%d", id);
+	rmi_dev->sbrmi_misc_dev.name		= devm_kasprintf(dev, GFP_KERNEL,
+						  "sbrmi-%x", rmi_dev->dev_static_addr);
 	rmi_dev->sbrmi_misc_dev.minor		= MISC_DYNAMIC_MINOR;
 	rmi_dev->sbrmi_misc_dev.fops		= &sbrmi_fops;
 	rmi_dev->sbrmi_misc_dev.parent		= dev;
-	rmi_dev->sbrmi_misc_dev.nodename	= devm_kasprintf(dev, GFP_KERNEL, "sbrmi%d", id);
+	rmi_dev->sbrmi_misc_dev.nodename	= devm_kasprintf(dev, GFP_KERNEL,
+						  "sbrmi-%x", rmi_dev->dev_static_addr);
 	rmi_dev->sbrmi_misc_dev.mode		= 0600;
 
 	ret = misc_register(&rmi_dev->sbrmi_misc_dev);
@@ -281,7 +280,6 @@ static int sbrmi_i2c_probe(struct i2c_client *client,
 		.reg_bits = 8,
 		.val_bits = 8,
 	};
-	int id;
 
 	rmi_dev = devm_kzalloc(dev, sizeof(struct apml_sbrmi_device), GFP_KERNEL);
 	if (!rmi_dev)
@@ -305,13 +303,10 @@ static int sbrmi_i2c_probe(struct i2c_client *client,
 	if (!hwmon_dev)
 		return PTR_ERR_OR_ZERO(hwmon_dev);
 
-	if (client->addr == SOCK_0_ADDR)
-		id = 0;
-	if (client->addr == SOCK_1_ADDR)
-		id = 1;
+	rmi_dev->dev_static_addr = client->addr;
 
 	init_completion(&rmi_dev->misc_fops_done);
-	return create_misc_rmi_device(rmi_dev, dev, id);
+	return create_misc_rmi_device(rmi_dev, dev);
 }
 
 static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
@@ -324,7 +319,6 @@ static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 		.val_bits = 8,
 	};
 	struct regmap *regmap;
-	int id;
 
 	regmap = devm_regmap_init_i3c(i3cdev, &sbrmi_i3c_regmap_config);
 	if (IS_ERR(regmap)) {
@@ -349,13 +343,11 @@ static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 	if (!hwmon_dev)
 		return PTR_ERR_OR_ZERO(hwmon_dev);
 
-	if (i3cdev->desc->info.static_addr == SOCK_0_ADDR)
-		id = 0;
-	if (i3cdev->desc->info.static_addr == SOCK_1_ADDR)
-		id = 1;
+	/* Need to verify for the static address for i3cdev */
+	rmi_dev->dev_static_addr = i3cdev->desc->info.static_addr;
 
 	init_completion(&rmi_dev->misc_fops_done);
-	return create_misc_rmi_device(rmi_dev, dev, id);
+	return create_misc_rmi_device(rmi_dev, dev);
 }
 
 static int sbrmi_i2c_remove(struct i2c_client *client)
