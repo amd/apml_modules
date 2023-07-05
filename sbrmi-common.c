@@ -17,6 +17,8 @@
 #define SW_ALERT_MASK	0x2
 /* Mask to check H/W Alert status bit */
 #define HW_ALERT_MASK	0x80
+/* Mask to check Mailbox status register support */
+#define SW_MB_MASK	0x20
 
 /* Software Interrupt for triggering */
 #define START_CMD	0x80
@@ -169,25 +171,43 @@ static int sbrmi_get_rev(struct apml_sbrmi_device *rmi_dev)
 	return 0;
 }
 
-/*
- * For Mailbox command software alert status bit is set by firmware
- * to indicate command completion
- * For RMI Rev 0x20, new h/w status bit is introduced. which is used
- * by firmware to indicate completion of commands (0x71, 0x72, 0x73).
- * wait for the status bit to be set by the firmware before
- * reading the data out.
- */
-static int sbrmi_wait_status(struct apml_sbrmi_device *rmi_dev,
-			     int *status, int mask)
+static int poll_sw_interrupt_reg(struct apml_sbrmi_device *rmi_dev)
 {
-	int ret, retry = 100;
+	int ret = 0, retry = 100;
+	int sw_int = 0;
 
 	do {
-		ret = regmap_read(rmi_dev->regmap, SBRMI_STATUS, status);
+		ret = regmap_read(rmi_dev->regmap, SBRMI_SW_INTERRUPT, &sw_int);
 		if (ret < 0)
 			return ret;
 
-		if (*status & mask)
+		if (!(sw_int & 0x1))
+			break;
+
+		/* Wait 1~2 second for firmware to return data out */
+		if (retry > 95)
+			usleep_range(50, 100);
+		else
+			usleep_range(10000, 20000);
+	} while (retry--);
+
+	if (retry < 0)
+		ret = -ETIMEDOUT;
+	return ret;
+}
+
+static int poll_status_register(struct apml_sbrmi_device *rmi_dev,
+				int mask)
+{
+	int ret = 0, retry = 100;
+	int status;
+
+	do {
+		ret = regmap_read(rmi_dev->regmap, SBRMI_STATUS, &status);
+		if (ret < 0)
+			return ret;
+
+		if (status & mask)
 			break;
 
 		/* Wait 1~2 second for firmware to return data out */
@@ -249,13 +269,47 @@ static int msr_datain_v21(struct apml_sbrmi_device *rmi_dev,
 	return ret;
 }
 
+/*
+ * For Mailbox command software alert status bit is set by firmware
+ * to indicate command completion
+ * For RMI Rev 0x20, new h/w status bit is introduced. which is used
+ * by firmware to indicate completion of commands (0x71, 0x72, 0x73).
+ * wait for the status bit to be set by the firmware before
+ * reading the data out.
+ */
+static int sbrmi_wait_status(struct apml_sbrmi_device *rmi_dev,
+			     int mask)
+{
+	int ctrl_val = 0;
+	int ret = 0;
+
+	/* cache the rev value to identify if protocol is supported or not */
+	/* should be called here or in mailbox_xfer ? */
+	if (!rmi_dev->rev) {
+		ret = sbrmi_get_rev(rmi_dev);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (mask != SW_ALERT_MASK || rmi_dev->rev == 0x10)
+		return poll_status_register(rmi_dev, mask);
+
+	ret = regmap_read(rmi_dev->regmap, SBRMI_CTRL, &ctrl_val);
+	if (ret < 0)
+		return ret;
+
+	if (ctrl_val & SW_MB_MASK)
+		return poll_status_register(rmi_dev, mask);
+	else
+		return poll_sw_interrupt_reg(rmi_dev);
+}
+
 /* MCA MSR protocol */
 int rmi_mca_msr_read(struct apml_sbrmi_device *rmi_dev,
 		     struct apml_message *msg)
 {
 	struct cpu_msr_outdata output = {0};
 	int ret;
-	int hw_status;
 
 	if (!rmi_dev->regmap)
 		return ENODEV;
@@ -287,7 +341,7 @@ int rmi_mca_msr_read(struct apml_sbrmi_device *rmi_dev,
 		return -EOPNOTSUPP;
 	}
 
-	ret = sbrmi_wait_status(rmi_dev, &hw_status, HW_ALERT_MASK);
+	ret = sbrmi_wait_status(rmi_dev, HW_ALERT_MASK);
 	if (ret < 0)
 		goto exit_unlock;
 
@@ -445,7 +499,7 @@ int rmi_cpuid_read(struct apml_sbrmi_device *rmi_dev,
 		   struct apml_message *msg)
 {
 	struct cpu_msr_outdata output = {0};
-	int ret, hw_status;
+	int ret;
 
 	if (!rmi_dev->regmap)
 		return ENODEV;
@@ -477,7 +531,7 @@ int rmi_cpuid_read(struct apml_sbrmi_device *rmi_dev,
 		return -EOPNOTSUPP;
 	}
 
-	ret = sbrmi_wait_status(rmi_dev, &hw_status, HW_ALERT_MASK);
+	ret = sbrmi_wait_status(rmi_dev, HW_ALERT_MASK);
 	if (ret < 0)
 		goto exit_unlock;
 
@@ -526,7 +580,6 @@ int rmi_mailbox_xfer(struct apml_sbrmi_device *rmi_dev,
 {
 	unsigned int bytes = 0, ec = 0;
 	int i, ret;
-	int sw_status;
 	u8 byte = 0;
 
 	if (!rmi_dev->regmap)
@@ -573,7 +626,7 @@ int rmi_mailbox_xfer(struct apml_sbrmi_device *rmi_dev,
 	 * an ALERT (if enabled) to initiator (BMC) to indicate completion
 	 * of the requested command
 	 */
-	ret = sbrmi_wait_status(rmi_dev, &sw_status, SW_ALERT_MASK);
+	ret = sbrmi_wait_status(rmi_dev, SW_ALERT_MASK);
 	if (ret)
 		goto exit_unlock;
 	/*
