@@ -19,6 +19,7 @@
 #include <linux/of.h>
 #include <linux/fs.h>
 #include <linux/regmap.h>
+#include <linux/version.h>
 
 #include "sbrmi-common.h"
 
@@ -350,12 +351,20 @@ static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 	return create_misc_rmi_device(rmi_dev, dev);
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
 static int sbrmi_i2c_remove(struct i2c_client *client)
+#else
+static void sbrmi_i2c_remove(struct i2c_client *client)
+#endif
 {
 	struct apml_sbrmi_device *rmi_dev = dev_get_drvdata(&client->dev);
 
 	if (!rmi_dev)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
 		return 0;
+#else
+		return;
+#endif
 
 	/*
 	 * Set the no_new_trans so no new transaction can
@@ -377,15 +386,25 @@ static int sbrmi_i2c_remove(struct i2c_client *client)
 	rmi_dev->sbrmi_misc_dev.parent = NULL;
 
 	dev_info(&client->dev, "Removed sbrmi driver\n");
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
 	return 0;
+#endif
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 static int sbrmi_i3c_remove(struct i3c_device *i3cdev)
+#else
+static void sbrmi_i3c_remove(struct i3c_device *i3cdev)
+#endif
 {
 	struct apml_sbrmi_device *rmi_dev = dev_get_drvdata(&i3cdev->dev);
 
 	if (!rmi_dev)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 		return 0;
+#else
+		return;
+#endif
 
 	/*
 	 * Set the no_new_trans so no new transaction can
@@ -407,7 +426,9 @@ static int sbrmi_i3c_remove(struct i3c_device *i3cdev)
 	rmi_dev->sbrmi_misc_dev.parent = NULL;
 
 	dev_info(&i3cdev->dev, "Removed sbrmi_i3c driver\n");
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	return 0;
+#endif
 }
 
 static const struct i2c_device_id sbrmi_id[] = {
