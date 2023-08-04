@@ -22,6 +22,7 @@
 #include <linux/of_device.h>
 #include <linux/of.h>
 #include <linux/regmap.h>
+#include <linux/version.h>
 
 #include "amd-apml.h"
 
@@ -361,7 +362,11 @@ static int sbtsi_i2c_probe(struct i2c_client *client,
 	return create_misc_tsi_device(tsi_dev, dev);
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 static int sbtsi_i3c_remove(struct i3c_device *i3cdev)
+#else
+static void sbtsi_i3c_remove(struct i3c_device *i3cdev)
+#endif
 {
 	struct apml_sbtsi_device *tsi_dev = dev_get_drvdata(&i3cdev->dev);
 
@@ -369,10 +374,16 @@ static int sbtsi_i3c_remove(struct i3c_device *i3cdev)
 		misc_deregister(&tsi_dev->sbtsi_misc_dev);
 
 	dev_info(&i3cdev->dev, "Removed sbtsi-i3c driver\n");
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	return 0;
+#endif
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
 static int sbtsi_i2c_remove(struct i2c_client *client)
+#else
+static void sbtsi_i2c_remove(struct i2c_client *client)
+#endif
 {
 	struct apml_sbtsi_device *tsi_dev = dev_get_drvdata(&client->dev);
 
@@ -380,7 +391,9 @@ static int sbtsi_i2c_remove(struct i2c_client *client)
 		misc_deregister(&tsi_dev->sbtsi_misc_dev);
 
 	dev_info(&client->dev, "Removed sbtsi driver\n");
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
 	return 0;
+#endif
 }
 
 static const struct i3c_device_id sbtsi_i3c_id[] = {
