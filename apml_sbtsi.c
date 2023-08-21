@@ -327,8 +327,12 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 	return create_misc_tsi_device(tsi_dev, dev);
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 static int sbtsi_i2c_probe(struct i2c_client *client,
 			   const struct i2c_device_id *tsi_id)
+#else
+static int sbtsi_i2c_probe(struct i2c_client *client)
+#endif
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
