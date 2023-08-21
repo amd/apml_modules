@@ -385,8 +385,12 @@ static int sbrmi_i2c_identify_reg_addr_size(struct i2c_client *i2c, u32 *size, u
 	return ret;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
 static int sbrmi_i2c_probe(struct i2c_client *client,
 			   const struct i2c_device_id *rmi_id)
+#else
+static int sbrmi_i2c_probe(struct i2c_client *client)
+#endif
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
