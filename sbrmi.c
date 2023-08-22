@@ -31,6 +31,18 @@
 
 #define MAX_WAIT_TIME_SEC	(3)
 
+/* SBRMI registers data out is 1 byte */
+#define SBRMI_REG_DATA_SIZE		0x1
+/* Default SBRMI register address is 1 byte */
+#define SBRMI_REG_ADDR_SIZE_DEF		0x1
+/* TURIN SBRMI register address is 2 byte */
+#define SBRMI_REG_ADDR_SIZE_TWO_BYTE	0x2
+
+/* Two xfers, one write and one read require to read the data */
+#define I3C_I2C_MSG_XFER_SIZE		0x2
+
+static int configure_regmap(struct apml_sbrmi_device *rmi_dev);
+
 enum sbrmi_msg_id {
 	SBRMI_READ_PKG_PWR_CONSUMPTION = 0x1,
 	SBRMI_WRITE_PKG_PWR_LIMIT,
@@ -62,6 +74,14 @@ static int sbrmi_read(struct device *dev, enum hwmon_sensor_types type,
 
 	if (type != hwmon_power)
 		return -EINVAL;
+	/* Configure regmap if not configured yet */
+	if (!rmi_dev->regmap) {
+		ret = configure_regmap(rmi_dev);
+		if (ret < 0) {
+			pr_err("regmap configuration failed with return value:%d in hwmon read ops\n", ret);
+			return ret;
+		}
+	}
 
 	mutex_lock(&rmi_dev->lock);
 	msg.data_in.reg_in[RD_FLAG_INDEX] = 1;
@@ -102,6 +122,14 @@ static int sbrmi_write(struct device *dev, enum hwmon_sensor_types type,
 
 	if (type != hwmon_power && attr != hwmon_power_cap)
 		return -EINVAL;
+	/* Configure regmap if not configured yet */
+	if (!rmi_dev->regmap) {
+		ret = configure_regmap(rmi_dev);
+		if (ret < 0) {
+			pr_err("regmap configuration failed with return value:%d in hwmon write ops\n", ret);
+			return ret;
+		}
+	}
 	/*
 	 * hwmon power attributes are in microWatt
 	 * mailbox read/write is in mWatt
@@ -163,9 +191,9 @@ static long sbrmi_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
 	struct apml_message msg = { 0 };
 	bool read = false;
 	int ret = -EFAULT;
+	struct apml_sbrmi_device *rmi_dev;
 
-	struct apml_sbrmi_device *rmi_dev = container_of(fp->private_data, struct apml_sbrmi_device,
-							 sbrmi_misc_dev);
+	rmi_dev = fp->private_data;
 	if (!rmi_dev)
 		return -ENODEV;
 
@@ -216,7 +244,7 @@ static long sbrmi_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
 		/* REG R/W */
 		if (read) {
 			ret = regmap_read(rmi_dev->regmap,
-					  msg.data_in.reg_in[REG_OFF_INDEX],
+					  msg.data_in.mb_in[REG_OFF_INDEX],
 					  &msg.data_out.mb_out[RD_WR_DATA_INDEX]);
 		} else {
 			ret = regmap_write(rmi_dev->regmap,
@@ -243,8 +271,38 @@ static long sbrmi_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
 	return ret;
 }
 
+static int sbrmi_open(struct inode *inode, struct file *filp)
+{
+	struct miscdevice *mdev = filp->private_data;
+	struct apml_sbrmi_device *rmi_dev = container_of(mdev, struct apml_sbrmi_device,
+							 sbrmi_misc_dev);
+	int ret = 0;
+
+	if (!rmi_dev)
+		return -ENODEV;
+
+	if (!rmi_dev->regmap) {
+		ret = configure_regmap(rmi_dev);
+		if (ret < 0) {
+			pr_err("regmap configuration failed with return value:%d in misc dev open\n", ret);
+			return ret;
+		}
+	}
+	filp->private_data = rmi_dev;
+	return 0;
+}
+
+static int sbrmi_release(struct inode *inode, struct file *filp)
+{
+	filp->private_data = NULL;
+
+	return 0;
+}
+
 static const struct file_operations sbrmi_fops = {
 	.owner		= THIS_MODULE,
+	.open		= sbrmi_open,
+	.release	= sbrmi_release,
 	.unlocked_ioctl	= sbrmi_ioctl,
 	.compat_ioctl	= sbrmi_ioctl,
 };
@@ -271,16 +329,52 @@ static int create_misc_rmi_device(struct apml_sbrmi_device *rmi_dev,
 	return ret;
 }
 
+static int sbrmi_i2c_reg_read(struct i2c_client *i2cdev, int reg_size, u32 *val)
+{
+	struct i2c_msg xfer[I3C_I2C_MSG_XFER_SIZE];
+	int reg = SBRMI_REV;
+	int val_size = SBRMI_REG_DATA_SIZE;
+
+	xfer[0].addr = i2cdev->addr;
+	xfer[0].flags = 0;
+	xfer[0].len = reg_size;
+	xfer[0].buf = (void *)&reg;
+
+	xfer[1].addr = i2cdev->addr;
+	xfer[1].flags = I2C_M_RD;
+	xfer[1].len = val_size;
+	xfer[1].buf = (void *)val;
+
+	return i2c_transfer(i2cdev->adapter, xfer, I3C_I2C_MSG_XFER_SIZE);
+}
+
+static int sbrmi_i2c_identify_reg_addr_size(struct i2c_client *i2c, u32 *size, u32 *rev)
+{
+	u32 reg_size;
+	int ret;
+
+	reg_size = SBRMI_REG_ADDR_SIZE_TWO_BYTE;
+
+	ret = sbrmi_i2c_reg_read(i2c, reg_size, rev);
+	if (ret != I3C_I2C_MSG_XFER_SIZE) {
+		reg_size = SBRMI_REG_ADDR_SIZE_DEF;
+		ret = sbrmi_i2c_reg_read(i2c, reg_size, rev);
+		if (ret != I3C_I2C_MSG_XFER_SIZE) {
+			pr_err("I2C reg read failed with return value:%d\n", ret);
+			return ret;
+		}
+	}
+
+	*size = reg_size;
+	return ret;
+}
+
 static int sbrmi_i2c_probe(struct i2c_client *client,
 			   const struct i2c_device_id *rmi_id)
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
 	struct apml_sbrmi_device *rmi_dev;
-	struct regmap_config sbrmi_i2c_regmap_config = {
-		.reg_bits = 8,
-		.val_bits = 8,
-	};
 
 	rmi_dev = devm_kzalloc(dev, sizeof(struct apml_sbrmi_device), GFP_KERNEL);
 	if (!rmi_dev)
@@ -288,11 +382,8 @@ static int sbrmi_i2c_probe(struct i2c_client *client,
 
 	atomic_set(&rmi_dev->in_progress, 0);
 	atomic_set(&rmi_dev->no_new_trans, 0);
+	rmi_dev->client = client;
 	mutex_init(&rmi_dev->lock);
-
-	rmi_dev->regmap = devm_regmap_init_i2c(client, &sbrmi_i2c_regmap_config);
-	if (IS_ERR(rmi_dev->regmap))
-		return PTR_ERR(rmi_dev->regmap);
 
 	dev_set_drvdata(dev, (void *)rmi_dev);
 
@@ -310,30 +401,118 @@ static int sbrmi_i2c_probe(struct i2c_client *client,
 	return create_misc_rmi_device(rmi_dev, dev);
 }
 
+static int sbrmi_i3c_reg_read(struct i3c_device *i3cdev, int reg_size, u32 *val)
+{
+	struct i3c_priv_xfer xfers[I3C_I2C_MSG_XFER_SIZE];
+	int reg = SBRMI_REV;
+	int val_size = SBRMI_REG_DATA_SIZE;
+
+	xfers[0].rnw = false;
+	xfers[0].len = reg_size;
+	xfers[0].data.out = &reg;
+
+	xfers[1].rnw = true;
+	xfers[1].len = val_size;
+	xfers[1].data.in = val;
+
+	return i3c_device_do_priv_xfers(i3cdev, xfers, I3C_I2C_MSG_XFER_SIZE);
+}
+
+static int sbrmi_i3c_identify_reg_addr_size(struct i3c_device *i3cdev, u32 *size, u32 *rev)
+{
+	u32 reg_size;
+	int ret;
+
+	reg_size = SBRMI_REG_ADDR_SIZE_TWO_BYTE;
+	ret = sbrmi_i3c_reg_read(i3cdev, reg_size, rev);
+	if (ret < 0) {
+		reg_size = SBRMI_REG_ADDR_SIZE_DEF;
+		ret = sbrmi_i3c_reg_read(i3cdev, reg_size, rev);
+		if (ret < 0) {
+			pr_err("I3C reg read failed with return value:%d\n", ret);
+			return ret;
+		}
+	}
+
+	*size = reg_size;
+	return ret;
+}
+
+static int init_rmi_regmap(struct apml_sbrmi_device *rmi_dev, u32 size, u32 rev)
+{
+	struct regmap_config sbrmi_regmap_config = {
+		.reg_bits = 8 * size,
+		.val_bits = 8,
+		.reg_format_endian = REGMAP_ENDIAN_LITTLE,
+	};
+	struct regmap *regmap;
+
+	if (rmi_dev->i3cdev) {
+		regmap = devm_regmap_init_i3c(rmi_dev->i3cdev,
+					      &sbrmi_regmap_config);
+		if (IS_ERR(regmap)) {
+			dev_err(&rmi_dev->i3cdev->dev,
+				"Failed to register i3c regmap %d\n",
+				(int)PTR_ERR(regmap));
+			return PTR_ERR(regmap);
+		}
+	} else if (rmi_dev->client) {
+		regmap = devm_regmap_init_i2c(rmi_dev->client,
+					      &sbrmi_regmap_config);
+		if (IS_ERR(regmap))
+			return PTR_ERR(regmap);
+	} else {
+		return -ENODEV;
+	}
+
+	rmi_dev->regmap = regmap;
+	rmi_dev->rev = rev;
+	return 0;
+}
+
+/*
+ * configure_regmap call should happen in probe, however if the server is power off,
+ * regmap configuration may fail and hence driver probe will fail.
+ * configure the regmap in hwmon/ioctl
+ */
+static int configure_regmap(struct apml_sbrmi_device *rmi_dev)
+{
+	u32 size;
+	u32 rev = 0;
+	int ret = 0;
+
+	if (rmi_dev->i3cdev) {
+		ret = sbrmi_i3c_identify_reg_addr_size(rmi_dev->i3cdev, &size, &rev);
+		if (ret < 0) {
+			pr_err("Reg size identification failed with return value:%d\n", ret);
+			return ret;
+		}
+	} else if (rmi_dev->client) {
+		ret = sbrmi_i2c_identify_reg_addr_size(rmi_dev->client, &size, &rev);
+		if (ret < 0) {
+			pr_err("Reg size identification failed with return value:%d\n", ret);
+			return ret;
+		}
+	} else {
+		return ret;
+	}
+	ret = init_rmi_regmap(rmi_dev, size, rev);
+	return ret;
+}
+
 static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 {
 	struct device *dev = &i3cdev->dev;
 	struct device *hwmon_dev;
 	struct apml_sbrmi_device *rmi_dev;
-	struct regmap_config sbrmi_i3c_regmap_config = {
-		.reg_bits = 8,
-		.val_bits = 8,
-	};
-	struct regmap *regmap;
 
-	regmap = devm_regmap_init_i3c(i3cdev, &sbrmi_i3c_regmap_config);
-	if (IS_ERR(regmap)) {
-		dev_err(&i3cdev->dev, "Failed to register i3c regmap %d\n",
-			(int)PTR_ERR(regmap));
-		return PTR_ERR(regmap);
-	}
 	rmi_dev = devm_kzalloc(dev, sizeof(struct apml_sbrmi_device), GFP_KERNEL);
 	if (!rmi_dev)
 		return -ENOMEM;
 
-	rmi_dev->regmap = regmap;
 	atomic_set(&rmi_dev->in_progress, 0);
 	atomic_set(&rmi_dev->no_new_trans, 0);
+	rmi_dev->i3cdev = i3cdev;
 	mutex_init(&rmi_dev->lock);
 
 	dev_set_drvdata(dev, (void *)rmi_dev);
@@ -494,5 +673,6 @@ int sbrmi_match_i2c(struct device *dev, const void *data)
 EXPORT_SYMBOL_GPL(sbrmi_match_i2c);
 
 MODULE_AUTHOR("Akshay Gupta <akshay.gupta@amd.com>");
+MODULE_AUTHOR("Naveenkrishna Chatradhi <naveenkrishna.chatradhi@amd.com>");
 MODULE_DESCRIPTION("Hwmon driver for AMD SB-RMI emulated sensor");
 MODULE_LICENSE("GPL");
