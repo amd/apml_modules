@@ -7,6 +7,12 @@
 
 #include <linux/types.h>
 
+/*
+ * Currently signal 33 to 64 are unused,
+ * using user signal number from that range
+ */
+#define USR_SIGNAL	44
+
 enum apml_protocol {
 	APML_CPUID	= 0x1000,
 	APML_MCA_MSR,

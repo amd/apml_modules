@@ -8,3 +8,4 @@
 obj-m		+= apml_sbrmi.o
 apml_sbrmi-objs	 = sbrmi.o sbrmi-common.o
 obj-m		+= apml_sbtsi.o
+obj-m		+= apml_alertl.o

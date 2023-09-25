@@ -473,6 +473,26 @@ static struct i3c_driver sbrmi_i3c_driver = {
 
 module_i3c_i2c_driver(sbrmi_i3c_driver, &sbrmi_driver)
 
+int sbrmi_match_i3c(struct device *dev, const void *data)
+{
+	const struct device_node *node = (const struct device_node *)data;
+
+	if (dev->of_node == node && dev->driver == &sbrmi_i3c_driver.driver)
+		return 1;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(sbrmi_match_i3c);
+
+int sbrmi_match_i2c(struct device *dev, const void *data)
+{
+	const struct device_node *node = (const struct device_node *)data;
+
+	if (dev->of_node == node && dev->driver == &sbrmi_driver.driver)
+		return 1;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(sbrmi_match_i2c);
+
 MODULE_AUTHOR("Akshay Gupta <akshay.gupta@amd.com>");
 MODULE_DESCRIPTION("Hwmon driver for AMD SB-RMI emulated sensor");
 MODULE_LICENSE("GPL");
