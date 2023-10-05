@@ -75,6 +75,9 @@ To clean the kernel module build directory:
 #> make clean
 
 
+Note: There is a fix required in the upstream linux kerenl header to handle the i3c_dev.
+the patch is kept in patches/ folder of this repo.
+
 Loading
 -------
 
