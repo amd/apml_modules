@@ -252,7 +252,7 @@ static long sbrmi_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
 					  &msg.data_out.mb_out[RD_WR_DATA_INDEX]);
 		} else {
 			ret = regmap_write(rmi_dev->regmap,
-					    msg.data_in.reg_in[REG_OFF_INDEX],
+					    msg.data_in.mb_in[REG_OFF_INDEX],
 					    msg.data_in.reg_in[REG_VAL_INDEX]);
 		}
 		break;
