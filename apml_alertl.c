@@ -166,7 +166,8 @@ static int apml_alertl_probe(struct platform_device *pdev)
 	struct device_node *dnode = dev->of_node;
 	struct apml_sbrmi_device **rmi_dev;
 	struct apml_alertl_data *oob_alert;
-	u32 gpio_alert_l, irq_num;
+	struct gpio_desc *alertl_gpiod;
+	u32 irq_num;
 	u32 num_dev = 0;
 	int ret = 0;
 	int i = 0;
@@ -202,22 +203,26 @@ static int apml_alertl_probe(struct platform_device *pdev)
 	}
 
 	/* Get the alert_l gpios, irq_number for the GPIO and register ISR*/
-	gpio_alert_l = of_get_gpio(dev->of_node, 0);
-	ret = gpio_is_valid(gpio_alert_l);
-	if (!ret) {
-		pr_err("Invalid GPIO, GPIO:%d IRQ request failed\n", gpio_alert_l);
+	alertl_gpiod = devm_gpiod_get(dev, NULL, GPIOD_IN);
+	if (IS_ERR(alertl_gpiod)) {
+		dev_err(&pdev->dev, "Unable to retrieve gpio\n");
+		return PTR_ERR(alertl_gpiod);
+	}
+
+	ret = gpiod_to_irq(alertl_gpiod);
+	if (ret < 0) {
+		dev_err(dev, "No corresponding irq for gpio error: %d\n", ret);
 		return ret;
 	}
-	irq_num = gpio_to_irq(gpio_alert_l);
-	pr_debug("Register IRQ:%u with GPIO:%u\n", irq_num, gpio_alert_l);
-
+	irq_num = ret;
+	pr_debug("Register IRQ:%u\n", irq_num);
 	ret = devm_request_threaded_irq(dev, irq_num,
 					NULL,
 					(void *)alert_l_irq_thread_handler,
 					IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 					"apml_irq", oob_alert);
 	if (ret) {
-		pr_err("Cannot register IRQ:%u for GPIO:%u\n", irq_num, gpio_alert_l);
+		pr_err("Cannot register IRQ:%u\n", irq_num);
 		return ret;
 	}
 
