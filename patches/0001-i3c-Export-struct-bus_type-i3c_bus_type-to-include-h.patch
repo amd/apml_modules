@@ -1,9 +1,10 @@
-From 0c02f4b7ae416d5f485ba09cfaf9bee0a93dcc90 Mon Sep 17 00:00:00 2001
-From: Akshay Gupta <Akshay.Gupta@amd.com>
-Date: Mon, 10 Apr 2023 04:33:55 -0400
+From 1c1cc4879a67e28ad9fb080d4fa4383a525af7cd Mon Sep 17 00:00:00 2001
+From: sathya priya kumar <SathyaPriya.K@amd.com>
+Date: Thu, 22 Feb 2024 02:44:58 -0500
 Subject: i3c: move i3c_bus_type definition to linux header
 
-At present, "struct bus_type i3c_bus_type" is defined in driver/i3c/internals.h.
+At present, "struct bus_type i3c_bus_type" is defined in
+driver/i3c/internals.h.
 Moving it to a standard include path, this way i3c client devices
 outside driver/i3c/ can utilize it.
 
@@ -11,11 +12,12 @@ Signed-off-by: Akshay Gupta <Akshay.Gupta@amd.com>
 Signed-off-by: Naveen Krishna Chatradhi <naveenkrishna.chatradhi@amd.com>
 ---
  drivers/i3c/internals.h    | 1 -
+ drivers/i3c/master.c       | 1 +
  include/linux/i3c/device.h | 1 +
- 2 files changed, 1 insertion(+), 1 deletion(-)
+ 3 files changed, 2 insertions(+), 1 deletion(-)
 
 diff --git a/drivers/i3c/internals.h b/drivers/i3c/internals.h
-index a6deedf5ce06..3414b6627150 100644
+index 908a807badaf..658f6303da05 100644
 --- a/drivers/i3c/internals.h
 +++ b/drivers/i3c/internals.h
 @@ -10,7 +10,6 @@
@@ -23,11 +25,23 @@ index a6deedf5ce06..3414b6627150 100644
  #include <linux/i3c/master.h>
 
 -extern struct bus_type i3c_bus_type;
- extern const struct device_type i3c_masterdev_type;
 
  void i3c_bus_normaluse_lock(struct i3c_bus *bus);
+ void i3c_bus_normaluse_unlock(struct i3c_bus *bus);
+diff --git a/drivers/i3c/master.c b/drivers/i3c/master.c
+index 87283e4a4607..e7f35e48dc30 100644
+--- a/drivers/i3c/master.c
++++ b/drivers/i3c/master.c
+@@ -340,6 +340,7 @@ struct bus_type i3c_bus_type = {
+ 	.probe = i3c_device_probe,
+ 	.remove = i3c_device_remove,
+ };
++EXPORT_SYMBOL_GPL(i3c_bus_type);
+
+ static enum i3c_addr_slot_status
+ i3c_bus_get_addr_slot_status(struct i3c_bus *bus, u16 addr)
 diff --git a/include/linux/i3c/device.h b/include/linux/i3c/device.h
-index ad18deff6574..b915cbeee184 100644
+index 90fa83464f00..df685520d11b 100644
 --- a/include/linux/i3c/device.h
 +++ b/include/linux/i3c/device.h
 @@ -15,6 +15,7 @@
@@ -39,5 +53,5 @@ index ad18deff6574..b915cbeee184 100644
   * enum i3c_error_code - I3C error codes
   *
 --
-2.27.0
+2.39.3
 
