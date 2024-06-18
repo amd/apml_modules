@@ -21,6 +21,9 @@
 #define START_CMD	0x80
 #define TRIGGER_MAILBOX	0x01
 
+/* Mailbox error with additional data */
+#define ERR_WITH_DATA	0x5
+
 /* Default message lengths as per APML command protocol */
 /* MSR */
 #define MSR_RD_REG_LEN		0xa
@@ -465,7 +468,7 @@ int rmi_mailbox_xfer(struct apml_sbrmi_device *rmi_dev,
 		goto exit_unlock;
 
 	ret = regmap_read(rmi_dev->regmap, SBRMI_OUTBNDMSG7, &ec);
-	if (ret || ec)
+	if (ret || (ec && ec != ERR_WITH_DATA))
 		goto exit_clear_alert;
 
 	/*
