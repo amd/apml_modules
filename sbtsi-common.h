@@ -13,10 +13,15 @@
 #include <linux/completion.h>
 #include <linux/miscdevice.h>
 #include <linux/mutex.h>
+#include <linux/cache.h>
 
 struct i2c_client;
 struct i3c_device;
 struct regmap;
+
+/* Maximum SB-TSI I3C TBAI transaction sizes in bytes */
+#define SBTSI_TBAI_TX_LEN 5  /* command byte + 4 input bytes */
+#define SBTSI_TBAI_RX_LEN 32 /* maximum dwords read per aggregate */
 
 /* Each client has this additional data */
 /* in_progress: set during any transaction, hwmon read/write or IOCTL,
@@ -34,6 +39,9 @@ struct apml_sbtsi_device {
 	atomic_t in_progress;
 	atomic_t no_new_trans;
 	struct completion misc_fops_done;
+	/* DMA-safe buffers for TBAI I3C private transfers */
+	u8 tbai_tx[SBTSI_TBAI_TX_LEN] __aligned(ARCH_DMA_MINALIGN);
+	u8 tbai_rx[SBTSI_TBAI_RX_LEN] __aligned(ARCH_DMA_MINALIGN);
 };
 
 #endif
