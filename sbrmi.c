@@ -387,6 +387,7 @@ static int sbrmi_i2c_identify_reg_addr_size(struct i2c_client *i2c, u32 *size, u
 		*size = SBRMI_REG_ADDR_SIZE_DEF;
 		break;
 	case 0x21:
+	case 0x31:
 		*size = SBRMI_REG_ADDR_SIZE_TWO_BYTE;
 		break;
 	default:
@@ -492,6 +493,7 @@ static int sbrmi_i3c_identify_reg_addr_size(struct i3c_device *i3cdev, u32 *size
 		*size = SBRMI_REG_ADDR_SIZE_DEF;
 		break;
 	case 0x21:
+	case 0x31:
 		*size = SBRMI_REG_ADDR_SIZE_TWO_BYTE;
 		break;
 	default:

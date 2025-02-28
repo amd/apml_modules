@@ -247,6 +247,7 @@ int rmi_mca_msr_read(struct apml_sbrmi_device *rmi_dev,
 
 		break;
 	case 0x21:
+	case 0x31:
 		ret = msr_datain_v21(rmi_dev, msg);
 		if (ret < 0)
 			goto exit_unlock;
@@ -359,6 +360,7 @@ int rmi_cpuid_read(struct apml_sbrmi_device *rmi_dev,
 			goto exit_unlock;
 		break;
 	case 0x21:
+	case 0x31:
 		ret = cpuid_datain_v21(rmi_dev, msg);
 		if (ret < 0)
 			goto exit_unlock;
