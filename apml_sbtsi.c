@@ -366,6 +366,10 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 	struct regmap *regmap;
 	const char *name;
 
+	if (!(I3C_PID_INSTANCE_ID(i3cdev->desc->info.pid) == 0 ||
+	    i3cdev->desc->info.pid == 0x22400000001))
+		return -ENXIO;
+
 	regmap = devm_regmap_init_i3c(i3cdev, &sbtsi_i3c_regmap_config);
 	if (IS_ERR(regmap)) {
 		dev_err(&i3cdev->dev, "Failed to register i3c regmap %d\n",
