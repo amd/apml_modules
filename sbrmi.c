@@ -616,6 +616,10 @@ static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 	struct apml_sbrmi_device *rmi_dev;
 	const char *name;
 
+	if (!(I3C_PID_INSTANCE_ID(i3cdev->desc->info.pid) == 1 ||
+	    i3cdev->desc->info.pid == 0x22400000002))
+		return -ENXIO;
+
 	rmi_dev = devm_kzalloc(dev, sizeof(struct apml_sbrmi_device), GFP_KERNEL);
 	if (!rmi_dev)
 		return -ENOMEM;
