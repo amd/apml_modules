@@ -299,6 +299,7 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 		.val_bits = 8,
 	};
 	struct regmap *regmap;
+	const char *name;
 
 	regmap = devm_regmap_init_i3c(i3cdev, &sbtsi_i3c_regmap_config);
 	if (IS_ERR(regmap)) {
@@ -315,14 +316,27 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 	mutex_init(&tsi_dev->lock);
 
 	dev_set_drvdata(dev, (void *)tsi_dev);
-	hwmon_dev = devm_hwmon_device_register_with_info(dev, "sbtsi_i3c", tsi_dev,
+
+	/* Need to verify for the static address for i3cdev */
+	tsi_dev->dev_static_addr = i3cdev->desc->info.static_addr;
+
+	switch(tsi_dev->dev_static_addr) {
+	case 0x4c:
+		name = devm_kasprintf(dev, GFP_KERNEL, "sbtsi_%s", "0.0");
+		break;
+	case 0x48:
+		name = devm_kasprintf(dev, GFP_KERNEL, "sbtsi_%s", "1.0");
+		break;
+	default:
+		name = devm_kasprintf(dev, GFP_KERNEL, "sbtsi_");
+		break;
+	}
+
+	hwmon_dev = devm_hwmon_device_register_with_info(dev, name, tsi_dev,
 							 &sbtsi_chip_info, NULL);
 
 	if (!hwmon_dev)
 		return PTR_ERR_OR_ZERO(hwmon_dev);
-
-	/* Need to verify for the static address for i3cdev */
-	tsi_dev->dev_static_addr = i3cdev->desc->info.static_addr;
 
 	return create_misc_tsi_device(tsi_dev, dev);
 }
@@ -341,6 +355,7 @@ static int sbtsi_i2c_probe(struct i2c_client *client)
 		.reg_bits = 8,
 		.val_bits = 8,
 	};
+	const char *name;
 
 	tsi_dev = devm_kzalloc(dev, sizeof(struct apml_sbtsi_device), GFP_KERNEL);
 	if (!tsi_dev)
@@ -353,15 +368,27 @@ static int sbtsi_i2c_probe(struct i2c_client *client)
 
 	dev_set_drvdata(dev, (void *)tsi_dev);
 
-	hwmon_dev = devm_hwmon_device_register_with_info(dev, client->name,
+	tsi_dev->dev_static_addr = client->addr;
+
+	switch(tsi_dev->dev_static_addr) {
+	case 0x4c:
+		name = devm_kasprintf(dev, GFP_KERNEL, "sbtsi_%s", "0.0");
+		break;
+	case 0x48:
+		name = devm_kasprintf(dev, GFP_KERNEL, "sbtsi_%s", "1.0");
+		break;
+	default:
+		name = devm_kasprintf(dev, GFP_KERNEL, "sbtsi_");
+		break;
+	}
+
+	hwmon_dev = devm_hwmon_device_register_with_info(dev, name,
 							 tsi_dev,
 							 &sbtsi_chip_info,
 							 NULL);
 
 	if (!hwmon_dev)
 		return PTR_ERR_OR_ZERO(hwmon_dev);
-
-	tsi_dev->dev_static_addr = client->addr;
 
 	return create_misc_tsi_device(tsi_dev, dev);
 }
