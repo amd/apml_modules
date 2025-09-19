@@ -301,7 +301,7 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 	struct regmap *regmap;
 	const char *name;
 
-	regmap = devm_regmap_init_i3c(i3cdev, &sbtsi_i3c_regmap_config);
+	regmap = devm_regmap_init_i2c(i3cdev, &sbtsi_i3c_regmap_config);
 	if (IS_ERR(regmap)) {
 		dev_err(&i3cdev->dev, "Failed to register i3c regmap %d\n",
 			(int)PTR_ERR(regmap));
