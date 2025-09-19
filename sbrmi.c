@@ -511,7 +511,7 @@ static int init_rmi_regmap(struct apml_sbrmi_device *rmi_dev, u32 size, u32 rev)
 	struct regmap *regmap;
 
 	if (rmi_dev->i3cdev) {
-		regmap = devm_regmap_init_i2c(rmi_dev->i3cdev,
+		regmap = devm_regmap_init_i3c(rmi_dev->i3cdev,
 					      &sbrmi_regmap_config);
 		if (IS_ERR(regmap)) {
 			dev_err(&rmi_dev->i3cdev->dev,
