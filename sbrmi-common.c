@@ -466,6 +466,20 @@ int rmi_mailbox_xfer(struct apml_sbrmi_device *rmi_dev,
 	ret = sbrmi_wait_status(rmi_dev, &sw_status, SW_ALERT_MASK);
 	if (ret)
 		goto exit_unlock;
+	/*
+	 * The firmware mirrors the original mailbox command to
+	 * SBRMI::OutBndMsg_inst0 (SBRMI_x30). Validating the command ID
+	 * against this register detects I2C transmission errors, bit-flips,
+	 * and signal noise, ensuring reliable command execution.
+	 */
+	ret = regmap_read(rmi_dev->regmap, SBRMI_OUTBNDMSG0, &bytes);
+	if (ret)
+		goto exit_unlock;
+
+	if (bytes != msg->cmd) {
+		ret = -EIO;
+		goto exit_unlock;
+	}
 
 	ret = regmap_read(rmi_dev->regmap, SBRMI_OUTBNDMSG7, &ec);
 	if (ret || (ec && ec != ERR_WITH_DATA))
