@@ -39,6 +39,12 @@
 #define SBTSI_REG_TEMP_DEC		0x10 /* RW */
 #define SBTSI_REG_TEMP_HIGH_DEC		0x13 /* RW */
 #define SBTSI_REG_TEMP_LOW_DEC		0x14 /* RW */
+#define SBTSI_REG_HBM_HIGH_INT  0x40 /* RW */
+#define SBTSI_REG_HBM_HIGH_DEC  0x44 /* RW */
+#define SBTSI_REG_HBM_LOW_INT   0x48 /* RW */
+#define SBTSI_REG_HBM_LOW_DEC   0x4C /* RW */
+#define SBTSI_REG_MAX_HBM_INT   0x50 /* RO */
+#define SBTSI_REG_MAX_HBM_DEC   0x54 /* RO */
 
 #define SBTSI_CONFIG_READ_ORDER_SHIFT	5
 
@@ -66,6 +72,20 @@ struct apml_sbtsi_device {
 	struct mutex lock;
 	u8 dev_static_addr;
 } __packed;
+
+/*
+ * Temperature sensor channel to the order of entries in
+ * sbtsi_info HWMON_CHANNEL_INFO(temp, ..., ...)
+ */
+enum sbtsi_channels {
+    CPU_CHANNEL,	/* CPU temp channel */
+    HBM_CHANNEL 	/* HBM temp channel */
+};
+
+static const char *const sbtsi_temp_label[] = {
+    "CpuTemp",
+    "MaxMemTemp",
+};
 
 /*
  * From SB-TSI spec: CPU temperature readings and limit registers encode the
@@ -97,6 +117,23 @@ static inline void sbtsi_mc_to_reg(s32 temp, u8 *integer, u8 *decimal)
 	*decimal = (temp & SBTSI_DEC_MASK) << SBTSI_DEC_OFFSET;
 }
 
+static int sbtsi_read_labels(struct device *dev,
+                   enum hwmon_sensor_types type,
+                   u32 attr, int channel, const char **str)
+{
+    switch (type) {
+    case hwmon_temp:
+        if (attr != hwmon_temp_label)
+            return -EOPNOTSUPP;
+
+        *str = sbtsi_temp_label[channel];;
+        break;
+    default:
+        return -EOPNOTSUPP;
+    }
+    return 0;
+}
+
 static int sbtsi_read(struct device *dev, enum hwmon_sensor_types type,
 		      u32 attr, int channel, long *val)
 {
@@ -106,37 +143,53 @@ static int sbtsi_read(struct device *dev, enum hwmon_sensor_types type,
 
 	switch (attr) {
 	case hwmon_temp_input:
-		/*
-		 * ReadOrder bit specifies the reading order of integer and
-		 * decimal part of CPU temp for atomic reads. If bit == 0,
-		 * reading integer part triggers latching of the decimal part,
-		 * so integer part should be read first. If bit == 1, read
-		 * order should be reversed.
-		 */
-		ret = regmap_read(tsi_dev->regmap, SBTSI_REG_CONFIG, &cfg);
-		if (ret < 0)
-			return ret;
-
 		mutex_lock(&tsi_dev->lock);
-		if (cfg & BIT(SBTSI_CONFIG_READ_ORDER_SHIFT)) {
-			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_DEC, &temp_dec);
-			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_INT, &temp_int);
+		if (channel == HBM_CHANNEL) {
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_MAX_HBM_INT, &temp_int);
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_MAX_HBM_DEC, &temp_dec);
 		} else {
-			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_INT, &temp_int);
-			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_DEC, &temp_dec);
+			/*
+			 * ReadOrder bit specifies the reading order of integer and
+			 * decimal part of CPU temp for atomic reads. If bit == 0,
+			 * reading integer part triggers latching of the decimal part,
+			 * so integer part should be read first. If bit == 1, read
+			 * order should be reversed.
+			 */
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_CONFIG, &cfg);
+			if (ret < 0) {
+				mutex_unlock(&tsi_dev->lock);
+				return ret;
+			}
+			if (cfg & BIT(SBTSI_CONFIG_READ_ORDER_SHIFT)) {
+				ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_DEC, &temp_dec);
+				ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_INT, &temp_int);
+			} else {
+				ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_INT, &temp_int);
+				ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_DEC, &temp_dec);
+			}
 		}
 		mutex_unlock(&tsi_dev->lock);
 		break;
 	case hwmon_temp_max:
 		mutex_lock(&tsi_dev->lock);
-		ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_HIGH_INT, &temp_int);
-		ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_HIGH_DEC, &temp_dec);
+		if (channel == HBM_CHANNEL) {
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_HBM_HIGH_INT, &temp_int);
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_HBM_HIGH_DEC, &temp_dec);
+		} else {
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_HIGH_INT, &temp_int);
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_HIGH_DEC, &temp_dec);
+		}
 		mutex_unlock(&tsi_dev->lock);
 		break;
 	case hwmon_temp_min:
 		mutex_lock(&tsi_dev->lock);
-		ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_LOW_INT, &temp_int);
-		ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_LOW_DEC, &temp_dec);
+		if (channel == HBM_CHANNEL) {
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_HBM_LOW_INT, &temp_int);
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_HBM_LOW_DEC, &temp_dec);
+		} else {
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_LOW_INT, &temp_int);
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_LOW_DEC, &temp_dec);
+		}
 		mutex_unlock(&tsi_dev->lock);
 		break;
 	default:
@@ -160,12 +213,22 @@ static int sbtsi_write(struct device *dev, enum hwmon_sensor_types type,
 
 	switch (attr) {
 	case hwmon_temp_max:
-		reg_int = SBTSI_REG_TEMP_HIGH_INT;
-		reg_dec = SBTSI_REG_TEMP_HIGH_DEC;
+		if (channel == HBM_CHANNEL) {
+			reg_int = SBTSI_REG_HBM_HIGH_INT;
+			reg_dec = SBTSI_REG_HBM_HIGH_DEC;
+		} else {
+			reg_int = SBTSI_REG_TEMP_HIGH_INT;
+			reg_dec = SBTSI_REG_TEMP_HIGH_DEC;
+		}
 		break;
 	case hwmon_temp_min:
-		reg_int = SBTSI_REG_TEMP_LOW_INT;
-		reg_dec = SBTSI_REG_TEMP_LOW_DEC;
+		if (channel == HBM_CHANNEL) {
+			reg_int = SBTSI_REG_HBM_LOW_INT;
+			reg_dec = SBTSI_REG_HBM_LOW_DEC;
+		} else {
+			reg_int = SBTSI_REG_TEMP_LOW_INT;
+			reg_dec = SBTSI_REG_TEMP_LOW_DEC;
+		}
 		break;
 	default:
 		return -EINVAL;
@@ -193,6 +256,7 @@ static umode_t sbtsi_is_visible(const void *data,
 	case hwmon_temp:
 		switch (attr) {
 		case hwmon_temp_input:
+		case hwmon_temp_label:
 			return 0444;
 		case hwmon_temp_min:
 			return 0644;
@@ -208,7 +272,8 @@ static umode_t sbtsi_is_visible(const void *data,
 
 static const struct hwmon_channel_info *sbtsi_info[] = {
 	HWMON_CHANNEL_INFO(chip, HWMON_C_REGISTER_TZ),
-	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT | HWMON_T_MIN | HWMON_T_MAX),
+	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT | HWMON_T_MIN | HWMON_T_MAX | HWMON_T_LABEL,
+							 HWMON_T_INPUT | HWMON_T_MIN | HWMON_T_MAX | HWMON_T_LABEL),
 	NULL
 };
 
@@ -216,6 +281,7 @@ static const struct hwmon_ops sbtsi_hwmon_ops = {
 	.is_visible = sbtsi_is_visible,
 	.read = sbtsi_read,
 	.write = sbtsi_write,
+	.read_string = sbtsi_read_labels,
 };
 
 static const struct hwmon_chip_info sbtsi_chip_info = {
