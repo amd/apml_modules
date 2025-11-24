@@ -372,7 +372,13 @@ static int sbrmi_i2c_identify_reg_addr_size(struct i2c_client *i2c, u32 *size, u
 			break;
 		}
 	}
-	if (ret != I3C_I2C_MSG_XFER_SIZE) {
+
+	/*
+	 * Validate the rev value is not 0xFF, as this value can be incorrectly cached
+	 * when executing 2-byte address operations on SBRMI rev 0x10.
+	 * For SBRMI rev 0x20 an error is returned.
+	 */
+	if (ret != I3C_I2C_MSG_XFER_SIZE || *rev == 0xFF) {
 		reg_size = SBRMI_REG_ADDR_SIZE_DEF;
 		ret = sbrmi_i2c_reg_read(i2c, reg_size, rev);
 		if (ret != I3C_I2C_MSG_XFER_SIZE) {
@@ -478,7 +484,13 @@ static int sbrmi_i3c_identify_reg_addr_size(struct i3c_device *i3cdev, u32 *size
 			break;
 		}
 	}
-	if (ret < 0) {
+
+	/*
+	 * Validate the rev value is not 0xFF, as this value can be incorrectly cached
+	 * when executing 2-byte address operations on SBRMI rev 0x10.
+	 * For SBRMI rev 0x20 an error is returned.
+	 */
+	if (ret < 0 || *rev == 0xFF) {
 		reg_size = SBRMI_REG_ADDR_SIZE_DEF;
 		ret = sbrmi_i3c_reg_read(i3cdev, reg_size, rev);
 		if (ret < 0) {

@@ -6,6 +6,7 @@
  * Copyright (C) 2021-2022 Advanced Micro Devices, Inc.
  */
 #include <linux/err.h>
+#include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/regmap.h>
@@ -45,6 +46,13 @@
 #define RD_CPUID_CMD	0x91
 #define RD_MCA_CMD	0x86
 
+/* CPUID RE-READ using Status cmd if timeout in v1.0 */
+#define TIMEOUT_ERROR		0x11
+#define STATUS_CMD		0x72
+#define WR_DLEN_STATUS_CMD	0x1
+#define WR_LEN_STATUS_CMD	0x3
+#define I2C_XFER_RW_LEN		2
+
 /* SB-RMI registers */
 enum sbrmi_reg {
 	SBRMI_REV		= 0x0,
@@ -69,6 +77,20 @@ enum sbrmi_reg {
 	SBRMI_SW_INTERRUPT,
 	SBRMI_THREAD128CS	= 0x4b,
 };
+
+/* input for bulk write to v10 of CPUID and MSR protocol */
+struct cpu_msr_indata_v10 {
+	u8 cpu_mca_cmd;	/* const value */
+	u8 wr_len;	/* const value */
+	u8 rd_len;	/* const value */
+	u8 proto_cmd;	/* const value */
+	u8 thread;	/* thread number */
+	union {
+		u8 reg_offset[4];	/* input value */
+		u32 value;
+	};
+	u8 ext; /* extended function */
+} __packed;
 
 /* input for bulk write to v21 of CPUID and MSR protocol */
 struct cpu_msr_indata_v21 {
@@ -114,6 +136,15 @@ struct cpu_msr_outdata {
 	input.value =  data_in
 
 #define prepare_cpuid_input_message(input, thread_id, func, ext_func, wr_data_len)	\
+	input.rd_len = CPUID_RD_DATA_LEN,				\
+	input.wr_len = wr_data_len,				\
+	input.proto_cmd = RD_CPUID_CMD,					\
+	input.thread = thread_id << 1,					\
+	input.value =  func,						\
+	input.ext =  ext_func
+
+#define prepare_cpuid_in_msg_v10(input, thread_id, func, ext_func, wr_data_len)	\
+	input.cpu_mca_cmd = CPUID_MCA_CMD,				\
 	input.rd_len = CPUID_RD_DATA_LEN,				\
 	input.wr_len = wr_data_len,				\
 	input.proto_cmd = RD_CPUID_CMD,					\
@@ -285,6 +316,82 @@ exit_unlock:
 	return ret;
 }
 
+static int cpuid_datain_v10(struct apml_sbrmi_device *rmi_dev,
+			    struct apml_message *msg)
+{
+	struct cpu_msr_outdata output = {0};
+	struct cpu_msr_indata_v10 input = {0};
+	struct i2c_msg xfer[2];
+	u8 in_status[3];
+	int ret;
+
+	prepare_cpuid_in_msg_v10(input, msg->data_in.reg_in[THREAD_LOW_INDEX],
+				 msg->data_in.mb_in[RD_WR_DATA_INDEX],
+				 msg->data_in.reg_in[EXT_FUNC_INDEX],
+				 CPUID_WR_DATA_LEN);
+
+	if (!rmi_dev->client)
+		return -ENODEV;
+
+	xfer[0].addr = rmi_dev->client->addr;
+	xfer[0].flags = 0;
+	xfer[0].len = CPUID_RD_REG_LEN;
+	xfer[0].buf = (void *)&input;
+
+	xfer[1].addr = rmi_dev->client->addr;
+	xfer[1].flags = I2C_M_RD;
+	xfer[1].len = CPUID_RD_REG_LEN;
+	xfer[1].buf = (u8 *)&output;
+
+	ret = i2c_transfer(rmi_dev->client->adapter, xfer, I2C_XFER_RW_LEN);
+	if (ret == I2C_XFER_RW_LEN)
+		ret = 0;
+	else
+		return -EIO;
+
+	if (output.num_bytes != CPUID_RD_REG_LEN - 1)
+		return -EMSGSIZE;
+
+	if (output.status && output.status != 0x11) {
+		ret = -EPROTOTYPE;
+		msg->fw_ret_code = output.status;
+		return ret;
+	}
+
+	if (output.status == TIMEOUT_ERROR) {
+		in_status[0] = STATUS_CMD;
+		in_status[1] = WR_DLEN_STATUS_CMD;
+		in_status[2] = CPUID_RD_DATA_LEN;
+
+		xfer[0].addr = rmi_dev->client->addr;
+		xfer[0].flags = 0;
+		xfer[0].len = WR_LEN_STATUS_CMD;
+		xfer[0].buf = (void *)in_status;
+
+		xfer[1].addr = rmi_dev->client->addr;
+		xfer[1].flags = I2C_M_RD;
+		xfer[1].len = CPUID_RD_REG_LEN;
+		xfer[1].buf = (u8 *)&output;
+
+		ret = i2c_transfer(rmi_dev->client->adapter, xfer, I2C_XFER_RW_LEN);
+		if (ret == I2C_XFER_RW_LEN)
+			ret = 0;
+		else
+			return -EIO;
+
+		if (output.num_bytes != CPUID_RD_REG_LEN - 1)
+			return -EMSGSIZE;
+
+		if (output.status) {
+			msg->fw_ret_code = output.status;
+			return -EPROTOTYPE;
+		}
+	}
+
+	msg->data_out.cpu_msr_out = output.value;
+	return ret;
+}
+
 static int cpuid_datain_v20(struct apml_sbrmi_device *rmi_dev,
 			    struct apml_message *msg)
 {
@@ -343,17 +450,18 @@ int rmi_cpuid_read(struct apml_sbrmi_device *rmi_dev,
 	if (!rmi_dev->regmap)
 		return ENODEV;
 
-	/* cache the rev value to identify if protocol is supported or not */
+	/* Cache the rev value */
 	if (!rmi_dev->rev) {
 		ret = sbrmi_get_rev(rmi_dev);
 		if (ret < 0)
 			return ret;
 	}
 
-	switch(rmi_dev->rev) {
+	switch (rmi_dev->rev) {
 	/* CPUID protocol for REV 0x10 is not supported*/
 	case 0x10:
-		return -EOPNOTSUPP;
+		ret = cpuid_datain_v10(rmi_dev, msg);
+		goto exit_unlock;
 	case 0x20:
 		ret = cpuid_datain_v20(rmi_dev, msg);
 		if (ret < 0)
