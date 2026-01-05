@@ -530,7 +530,7 @@ int rmi_mailbox_xfer(struct apml_sbrmi_device *rmi_dev,
 	u8 byte = 0;
 
 	if (!rmi_dev->regmap)
-		return ENODEV;
+		return -ENODEV;
 
 	msg->fw_ret_code = 0;
 
