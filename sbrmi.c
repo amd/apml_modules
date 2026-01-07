@@ -384,6 +384,22 @@ static int sbrmi_i2c_reg_read(struct i2c_client *i2cdev, int reg_size, u32 *val)
 	return i2c_transfer(i2cdev->adapter, xfer, I3C_I2C_MSG_XFER_SIZE);
 }
 
+static int update_reg_addr_size(u32 rev, u32 *size)
+{
+	switch (rev) {
+	case 0x10:
+	case 0x20:
+		*size = SBRMI_REG_ADDR_SIZE_DEF;
+		return 0;
+	case 0x21:
+	case 0x31:
+		*size = SBRMI_REG_ADDR_SIZE_TWO_BYTE;
+		return 0;
+	default:
+		return -EIO;
+	}
+}
+
 static int sbrmi_i2c_identify_reg_addr_size(struct i2c_client *i2c, u32 *size, u32 *rev)
 {
 	u32 reg_size;
@@ -419,20 +435,7 @@ static int sbrmi_i2c_identify_reg_addr_size(struct i2c_client *i2c, u32 *size, u
 		}
 	}
 
-	switch (*rev) {
-	case 0x10:
-	case 0x20:
-		*size = SBRMI_REG_ADDR_SIZE_DEF;
-		break;
-	case 0x21:
-	case 0x31:
-		*size = SBRMI_REG_ADDR_SIZE_TWO_BYTE;
-		break;
-	default:
-		ret = -EIO;
-		break;
-	}
-	return ret;
+	return update_reg_addr_size(*rev, size);
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
@@ -531,20 +534,7 @@ static int sbrmi_i3c_identify_reg_addr_size(struct i3c_device *i3cdev, u32 *size
 		}
 	}
 
-	switch (*rev) {
-	case 0x10:
-	case 0x20:
-		*size = SBRMI_REG_ADDR_SIZE_DEF;
-		break;
-	case 0x21:
-	case 0x31:
-		*size = SBRMI_REG_ADDR_SIZE_TWO_BYTE;
-		break;
-	default:
-		ret = -EIO;
-		break;
-	}
-	return ret;
+	return update_reg_addr_size(*rev, size);
 }
 
 static int init_rmi_regmap(struct apml_sbrmi_device *rmi_dev, u32 size, u32 rev)
