@@ -389,6 +389,7 @@ static int update_reg_addr_size(u32 rev, u32 *size)
 	switch (rev) {
 	case 0x10:
 	case 0x20:
+	case 0x30:
 		*size = SBRMI_REG_ADDR_SIZE_DEF;
 		return 0;
 	case 0x21:
