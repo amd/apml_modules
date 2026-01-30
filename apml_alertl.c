@@ -9,6 +9,7 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/i3c/device.h>
+#include <linux/i3c/master.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
@@ -246,7 +247,7 @@ static int apml_alertl_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int alert_remove(struct platform_device *pdev)
+static void alert_remove(struct platform_device *pdev)
 {
 #ifdef CONFIG_DEBUG_FS
 	if (amd_apml) {
@@ -254,7 +255,6 @@ static int alert_remove(struct platform_device *pdev)
 		amd_apml = NULL;
 	}
 #endif
-	return 0;
 }
 
 static const struct of_device_id apml_alertl_dt_ids[] = {
