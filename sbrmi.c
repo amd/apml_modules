@@ -22,6 +22,7 @@
 #include <linux/version.h>
 
 #include "sbrmi-common.h"
+#include "apml_common.h"
 
 /* Do not allow setting negative power limit */
 #define SBRMI_PWR_MIN	0
@@ -729,7 +730,20 @@ static int sbrmi_i2c_probe(struct i2c_client *client)
 		return PTR_ERR_OR_ZERO(hwmon_dev);
 
 	init_completion(&rmi_dev->misc_fops_done);
-	return create_misc_rmi_device(rmi_dev, dev);
+	ret = create_misc_rmi_device(rmi_dev, dev);
+	if (ret)
+		return ret;
+
+	/*
+	 * Best-effort APML common registry hookup. Probe still succeeds if this
+	 * fails (-EINVAL, -ENOMEM); hwmon and misc stay up but Alert_L will
+	 * not dispatch alerts for this device until registration succeeds.
+	 */
+	ret = apml_register_device(rmi_dev, APML_RMI_DEVICE);
+	if (ret != 0)
+		dev_warn(dev, "Failed to register with ALERT_L common system: %d\n", ret);
+
+	return 0;
 }
 
 static int sbrmi_i3c_reg_read(struct i3c_device *i3cdev, int reg_size, u32 *val)
@@ -899,7 +913,20 @@ static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 		return PTR_ERR_OR_ZERO(hwmon_dev);
 
 	init_completion(&rmi_dev->misc_fops_done);
-	return create_misc_rmi_device(rmi_dev, dev);
+	ret = create_misc_rmi_device(rmi_dev, dev);
+	if (ret)
+		return ret;
+
+	/*
+	 * Best-effort APML common registry hookup. Probe still succeeds if this
+	 * fails (-EINVAL, -ENOMEM); hwmon and misc stay up but Alert_L will
+	 * not dispatch alerts for this device until registration succeeds.
+	 */
+	ret = apml_register_device(rmi_dev, APML_RMI_DEVICE);
+	if (ret != 0)
+		dev_warn(dev, "Failed to register with ALERT_L common system: %d\n", ret);
+
+	return 0;
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
@@ -931,6 +958,9 @@ static void sbrmi_i2c_remove(struct i2c_client *client)
 	if (atomic_read(&rmi_dev->in_progress))
 		wait_for_completion_timeout(&rmi_dev->misc_fops_done,
 					    MAX_WAIT_TIME_SEC * HZ);
+
+	/* Unregister from APML common system */
+	apml_unregister_device(rmi_dev, APML_RMI_DEVICE);
 	misc_deregister(&rmi_dev->sbrmi_misc_dev);
 	/* Assign fops and parent of misc dev to NULL */
 	rmi_dev->sbrmi_misc_dev.fops = NULL;
@@ -971,6 +1001,8 @@ static void sbrmi_i3c_remove(struct i3c_device *i3cdev)
 	if (atomic_read(&rmi_dev->in_progress))
 		wait_for_completion_timeout(&rmi_dev->misc_fops_done,
 					    MAX_WAIT_TIME_SEC * HZ);
+	/* Unregister from APML common system */
+	apml_unregister_device(rmi_dev, APML_RMI_DEVICE);
 	misc_deregister(&rmi_dev->sbrmi_misc_dev);
 	/* Assign fops and parent of misc dev to NULL */
 	rmi_dev->sbrmi_misc_dev.fops = NULL;
