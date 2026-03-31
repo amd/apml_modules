@@ -25,6 +25,7 @@
 #include <linux/version.h>
 
 #include "amd-apml.h"
+#include "sbtsi-common.h"
 
 /*
  * SB-TSI registers only support SMBus byte data access. "_INT" registers are
@@ -59,16 +60,6 @@
 #define SBTSI_INT_OFFSET	3
 #define SBTSI_DEC_OFFSET	5
 #define SBTSI_DEC_MASK		0x7
-
-struct apml_sbtsi_device {
-	struct miscdevice sbtsi_misc_dev;
-	struct regmap *regmap;
-	struct mutex lock;
-	atomic_t in_progress;
-	atomic_t no_new_trans;
-	struct completion misc_fops_done;
-	u8 dev_static_addr;
-};
 
 /*
  * From SB-TSI spec: CPU temperature readings and limit registers encode the
