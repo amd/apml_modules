@@ -25,7 +25,7 @@
 #include <linux/version.h>
 
 #include "amd-apml.h"
-#include "sbtsi-common.h"
+#include "apml_common.h"
 
 /*
  * SB-TSI registers only support SMBus byte data access. "_INT" registers are
@@ -356,6 +356,7 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 	};
 	struct regmap *regmap;
 	const char *name;
+	int ret;
 
 	if (!(I3C_PID_INSTANCE_ID(i3cdev->desc->info.pid) == 0 ||
 	    i3cdev->desc->info.pid == 0x22400000001))
@@ -374,6 +375,7 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 
 	atomic_set(&tsi_dev->in_progress, 0);
 	atomic_set(&tsi_dev->no_new_trans, 0);
+	tsi_dev->i3cdev = i3cdev;
 	tsi_dev->regmap = regmap;
 	mutex_init(&tsi_dev->lock);
 
@@ -407,7 +409,20 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 		return PTR_ERR_OR_ZERO(hwmon_dev);
 
 	init_completion(&tsi_dev->misc_fops_done);
-	return create_misc_tsi_device(tsi_dev, dev);
+	ret = create_misc_tsi_device(tsi_dev, dev);
+	if (ret)
+		return ret;
+
+	/*
+	 * Best-effort APML common registry hookup. Probe still succeeds if this
+	 * fails (-EINVAL, -ENOMEM); hwmon and misc stay up but Alert_L will
+	 * not dispatch alerts for this device until registration succeeds.
+	 */
+	ret = apml_register_device(tsi_dev, APML_TSI_DEVICE);
+	if (ret != 0)
+		dev_warn(dev, "Failed to register with ALERT_L common system: %d\n", ret);
+
+	return 0;
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
@@ -425,6 +440,7 @@ static int sbtsi_i2c_probe(struct i2c_client *client)
 		.val_bits = 8,
 	};
 	const char *name;
+	int ret;
 
 	tsi_dev = devm_kzalloc(dev, sizeof(struct apml_sbtsi_device), GFP_KERNEL);
 	if (!tsi_dev)
@@ -433,6 +449,7 @@ static int sbtsi_i2c_probe(struct i2c_client *client)
 	atomic_set(&tsi_dev->in_progress, 0);
 	atomic_set(&tsi_dev->no_new_trans, 0);
 	mutex_init(&tsi_dev->lock);
+	tsi_dev->client = client;
 	tsi_dev->regmap = devm_regmap_init_i2c(client, &sbtsi_i2c_regmap_config);
 	if (IS_ERR(tsi_dev->regmap))
 		return PTR_ERR(tsi_dev->regmap);
@@ -462,7 +479,20 @@ static int sbtsi_i2c_probe(struct i2c_client *client)
 		return PTR_ERR_OR_ZERO(hwmon_dev);
 
 	init_completion(&tsi_dev->misc_fops_done);
-	return create_misc_tsi_device(tsi_dev, dev);
+	ret = create_misc_tsi_device(tsi_dev, dev);
+	if (ret)
+		return ret;
+
+	/*
+	 * Best-effort APML common registry hookup. Probe still succeeds if this
+	 * fails (-EINVAL, -ENOMEM); hwmon and misc stay up but Alert_L will
+	 * not dispatch alerts for this device until registration succeeds.
+	 */
+	ret = apml_register_device(tsi_dev, APML_TSI_DEVICE);
+	if (ret != 0)
+		dev_warn(dev, "Failed to register with ALERT_L common system: %d\n", ret);
+
+	return 0;
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
@@ -494,6 +524,7 @@ static void sbtsi_i3c_remove(struct i3c_device *i3cdev)
 	if (atomic_read(&tsi_dev->in_progress))
 		wait_for_completion_timeout(&tsi_dev->misc_fops_done,
 					    3 * HZ);
+	apml_unregister_device(tsi_dev, APML_TSI_DEVICE);
 	misc_deregister(&tsi_dev->sbtsi_misc_dev);
 	/* Assign fops and parent of misc dev to NULL */
 	tsi_dev->sbtsi_misc_dev.fops = NULL;
@@ -534,6 +565,7 @@ static void sbtsi_i2c_remove(struct i2c_client *client)
 	if (atomic_read(&tsi_dev->in_progress))
 		wait_for_completion_timeout(&tsi_dev->misc_fops_done,
 					    3 * HZ);
+	apml_unregister_device(tsi_dev, APML_TSI_DEVICE);
 	misc_deregister(&tsi_dev->sbtsi_misc_dev);
 	/* Assign fops and parent of misc dev to NULL */
 	tsi_dev->sbtsi_misc_dev.fops = NULL;
