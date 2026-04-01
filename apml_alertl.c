@@ -1,264 +1,377 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * alert_l.c - Alert_l driver for AMD APML devices
+ * apml_alertl.c - Alert_L driver for AMD APML devices
  *
- * Copyright (C) 2023-2024 Advanced Micro Devices, Inc.
+ * Copyright (C) 2025 Advanced Micro Devices, Inc.
  */
 
-#include <linux/debugfs.h>
-#include <linux/init.h>
-#include <linux/interrupt.h>
-#include <linux/i3c/device.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/of_gpio.h>
-#include <linux/regmap.h>
+#include <linux/init.h>
 #include <linux/platform_device.h>
+#include <linux/interrupt.h>
+#include <linux/regmap.h>
+#include <linux/i3c/device.h>
+#include <linux/i3c/master.h>
+#include <linux/gpio/consumer.h>
+#include <linux/of.h>
+#include <linux/list.h>
+#include <linux/mutex.h>
+#include <linux/i2c.h>
 
-#include "sbrmi-common.h"
+#include "apml_common.h"
 #include "apml_alertl.h"
 
 #define DRIVER_NAME "apml_alertl"
 
 #define RAS_STATUS_REG		0x4C
-#define STATUS_REG		0x2
-#define RAS_ALERT_STATUS	BIT(1)
+#define RMI_STATUS_REG		0x2
+
+/*
+ * SB-TSI status (0x02): read-only, volatile.
+ * TempHighAlert (bit 4) / TempLowAlert (bit 3) set on threshold crossings for
+ * the required consecutive samples. Latched mode: cleared on read; comparator
+ * mode: cleared when temperature stays inside the limit for the required
+ * consecutive samples.
+ */
+#define TSI_STATUS_REG		0x02
+/*
+ * SBRMI::Status Alert_L async status (bit 3): set when ALERT_L is asserted for
+ * RAS/fatal events read from RAS status (0x4C). Write-1-to-clear here so
+ * ALERT_L deasserts.
+ */
+#define RAS_ALERT_ASYNC		BIT(3)
+#define TSI_STATUS_SHIFT	24
+
+#define ENVP_SRC_INDX		0
+#define ENVP_BUS_NUM_INDX	1
+#define ENVP_PID_INDX		2
+#define ENVP_ADDR_INDX		3
+#define NUM_ENVP		5
 
 MODULE_ALIAS("apml_alertl:" DRIVER_NAME);
 
-#ifdef CONFIG_DEBUG_FS
-struct dentry *amd_apml;
-struct task_struct *p_task;
-u64 proc_pid;
-#endif
-
-static irqreturn_t alert_l_irq_thread_handler(int irq, void *dev_id)
+/*
+ * The driver generates uevents for Temperature and RAS alerts (both fatal and non-fatal).
+ * Event data contains address, bus number, PID (for I3C devices; 0 otherwise), and alert
+ * source information. See amd-apml.h for alert source details.
+ */
+static int send_uevent(u8 address, int bus_num, u32 alert_src,
+		       u64 pid, struct device *dev)
 {
-	struct apml_alertl_data *oob_adata = dev_id;
-	struct apml_message msg = { 0 };
-	struct kernel_siginfo info = {0};
-	unsigned int status = 0;
-	int ret, i;
-
-	/*
-	 * Read RAS Status register to identify the RAS error
-	 * Currently only RAS fatal error is supported
-	 */
-
-	for (i = 0; i < oob_adata->num_of_rmi_devs; i++) {
-		if (!oob_adata->rmi_dev[i] || !oob_adata->rmi_dev[i]->regmap)
-			continue;
-		msg.data_in.reg_in[REG_OFF_INDEX] = RAS_STATUS_REG;
-
-		ret = regmap_read(oob_adata->rmi_dev[i]->regmap,
-				  msg.data_in.reg_in[REG_OFF_INDEX],
-				  &status);
-		if (ret < 0)
-			return ret;
-		if (status)
-			break;
-	}
-
-	if (!status)
-		return IRQ_HANDLED;
-
-	/* For RAS errors, signal the registered program*/
-	info.si_signo = USR_SIGNAL;
-	info.si_int = status | (oob_adata->rmi_dev[i]->dev_static_addr << 16);
-
-	pr_debug("Sending signal to the process, RAS bit is set sigint is %x\n", info.si_int);
-	p_task = pid_task(find_get_pid(proc_pid), PIDTYPE_PID);
-	if (p_task) {
-		ret = send_sig_info(USR_SIGNAL, &info, p_task);
-		if (ret < 0)
-			pr_err("Sending signal to the process, unsuccessful\n");
-			/* RAS status(0x4c) and Status register(0x2) bits clear is
-			 * required even if sending signal to user application
-			 * fails.
-			 * So no return even if signal send fails.
-			 */
-	}
-
-	/* Clear the RAS Status register */
-	if (!oob_adata->rmi_dev[i] || !oob_adata->rmi_dev[i]->regmap)
-		return -ENODEV;
-
-	mutex_lock(&oob_adata->rmi_dev[i]->lock);
-	msg.data_in.reg_in[REG_OFF_INDEX] = RAS_STATUS_REG;
-	ret = regmap_write(oob_adata->rmi_dev[i]->regmap,
-			   msg.data_in.reg_in[REG_OFF_INDEX],
-			   status);
-
-	msg.data_in.reg_in[REG_OFF_INDEX] = STATUS_REG;
-	ret = regmap_write(oob_adata->rmi_dev[i]->regmap,
-			   msg.data_in.reg_in[REG_OFF_INDEX],
-			   RAS_ALERT_STATUS);
-	mutex_unlock(&oob_adata->rmi_dev[i]->lock);
-	if (ret < 0)
-		return ret;
-
-	return IRQ_HANDLED;
-}
-
-#ifdef CONFIG_DEBUG_FS
-static int proc_pid_store(void *data, u64 value)
-{
-	struct task_struct *ptask;
+	char *alert_source[NUM_ENVP] = { NULL };
 	int ret = 0;
+	int i;
 
-	if (value == 0)
-		return -EINVAL;
-	/* The new value will override the previous value */
-	proc_pid = value;
-	ptask = pid_task(find_get_pid(proc_pid), PIDTYPE_PID);
-	if (!ptask) {
-		pr_err("PID not found\n");
-		return -EINVAL;
+	alert_source[ENVP_SRC_INDX] = kasprintf(GFP_KERNEL, "SOURCE=0x%08x", alert_src);
+	alert_source[ENVP_BUS_NUM_INDX] = kasprintf(GFP_KERNEL, "BUS_NUM=%d", bus_num);
+	alert_source[ENVP_PID_INDX] = kasprintf(GFP_KERNEL, "PID=0x%016llx", pid);
+	alert_source[ENVP_ADDR_INDX] = kasprintf(GFP_KERNEL, "ADDRESS=0x%02x", address);
+	alert_source[NUM_ENVP - 1] = NULL;
+
+	for (i = 0; i < NUM_ENVP - 1; i++) {
+		if (!alert_source[i]) {
+			ret = -ENOMEM;
+			goto out_free;
+		}
 	}
+
+	dev_dbg(dev, "Sending uevent: Addr:0x%x Src:0x%08x\n bus:%d pid: 0x%llx\n",
+		address, alert_src, bus_num, pid);
+	ret = kobject_uevent_env(&dev->kobj, KOBJ_CHANGE, alert_source);
+
+out_free:
+	for (i = 0; i < NUM_ENVP - 1; i++)
+		kfree(alert_source[i]);
 
 	return ret;
 }
 
-static int proc_pid_show(void *data, u64 *value)
+/*
+ * apml_alertl_get_device_identity - resolve uevent address, bus, and PID
+ */
+static int apml_alertl_get_device_identity(struct i2c_client *client,
+					   struct i3c_device *i3cdev,
+					   u8 dev_static_addr, u8 *addr,
+					   int *bus_num, u64 *pid)
 {
-	*value = proc_pid;
-	return 0;
-}
+	if (i3cdev) {
+		struct i3c_device_info info;
 
-DEFINE_DEBUGFS_ATTRIBUTE(proc_pid_fops, proc_pid_show, proc_pid_store, "%llu\n");
-#endif
-
-static void *get_apml_dev_byphandle(struct device_node *dnode,
-				    const char *phandle_name,
-				    int index)
-{
-	struct device_node *d_node;
-	struct device *dev;
-	void *apml_dev;
-
-	if (!phandle_name || !dnode)
-		return NULL;
-
-	d_node = of_parse_phandle(dnode, phandle_name, index);
-	if (IS_ERR_OR_NULL(d_node))
-		return NULL;
-
-	dev = bus_find_device(&i3c_bus_type, NULL, d_node, sbrmi_match_i3c);
-	if (!dev) {
-		dev = bus_find_device(&i2c_bus_type, NULL, d_node, sbrmi_match_i2c);
-		if (IS_ERR_OR_NULL(dev)) {
-			of_node_put(d_node);
-			return NULL;
-		}
+		i3c_device_get_info(i3cdev, &info);
+		*addr = dev_static_addr;
+		*bus_num = i3cdev->bus->id;
+		*pid = info.pid;
+		return 0;
 	}
 
-	of_node_put(d_node);
-	apml_dev = dev_get_drvdata(dev);
-	if (IS_ERR_OR_NULL(apml_dev))
-		return NULL;
+	if (client) {
+		*addr = client->addr;
+		*bus_num = client->adapter->nr;
+		*pid = 0;
+		return 0;
+	}
 
-	return apml_dev;
+	return -EINVAL;
+}
+
+/*
+ * apml_rmi_clear_alert_status - acknowledge a latched RAS alert in hardware
+ *
+ * Run promptly after any non-zero RAS_STATUS_REG read, before slow work such
+ * as uevent allocation, so ALERT_L can deassert and the falling-edge ONESHOT
+ * IRQ can see subsequent alerts. @addr is used for warning messages only.
+ */
+static int apml_rmi_clear_alert_status(struct apml_sbrmi_device *rmi,
+				       struct device *dev, unsigned int status,
+				       u8 addr)
+{
+	int ret;
+
+	mutex_lock(&rmi->lock);
+	ret = regmap_write(rmi->regmap, RAS_STATUS_REG, status);
+	if (ret) {
+		dev_warn(dev, "Failed to clear RAS status register (device: 0x%x): %d\n",
+			 addr, ret);
+	}
+
+	ret = regmap_write(rmi->regmap, RMI_STATUS_REG, RAS_ALERT_ASYNC);
+	if (ret) {
+		dev_warn(dev, "Failed to clear RMI status register (device: 0x%x): %d\n",
+			 addr, ret);
+	}
+	mutex_unlock(&rmi->lock);
+
+	return ret;
+}
+
+static int handle_rmi_device_alert(struct apml_device_node *device_node, struct device *dev)
+{
+	unsigned int status = 0;
+	int ret, bus_num, clear = 0;
+	u8 addr = 0;
+	u64 pid;
+
+	if (!device_node->rmi_dev || !device_node->rmi_dev->regmap) {
+		dev_warn(dev, "Invalid RMI device found\n");
+		return -EINVAL;
+	}
+
+	/* Protects individual device state and regmap transactions */
+	mutex_lock(&device_node->rmi_dev->lock);
+	/* Read RAS Status register */
+	ret = regmap_read(device_node->rmi_dev->regmap, RAS_STATUS_REG, &status);
+	mutex_unlock(&device_node->rmi_dev->lock);
+	if (ret)
+		return ret;
+
+	if (!status) {
+		/* No alert status - normal condition */
+		return 0;
+	}
+
+	ret = apml_alertl_get_device_identity(device_node->rmi_dev->client,
+					      device_node->rmi_dev->i3cdev,
+					      device_node->rmi_dev->dev_static_addr,
+					      &addr, &bus_num, &pid);
+	if (ret) {
+		dev_warn(dev, "RAS alert with invalid device identity (%d)\n",
+			 ret);
+		goto out;
+	}
+
+	if (!addr) {
+		dev_warn(dev, "RAS alert with no assigned address\n");
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/*
+	 * Clear latched RAS status before any slow uevent work so ALERT_L can
+	 * deassert promptly.
+	 */
+	clear = apml_rmi_clear_alert_status(device_node->rmi_dev, dev, status, addr);
+
+	ret = send_uevent(addr, bus_num, status, pid, dev);
+	if (ret) {
+		dev_info(dev, "Failed to send uevent for RAS alert (device: 0x%x, err: %d)\n",
+			 addr, ret);
+	}
+
+out:
+	return clear ? clear : ret;
+}
+
+/* Handle TSI device alerts */
+static int handle_tsi_device_alert(struct apml_device_node *device_node, struct device *dev)
+{
+	unsigned int status = 0;
+	int ret, bus_num;
+	u8 addr;
+	u64 pid;
+
+	if (!device_node->tsi_dev || !device_node->tsi_dev->regmap) {
+		dev_warn(dev, "Invalid TSI device found\n");
+		return -EINVAL;
+	}
+
+	/* Protects individual device state and regmap transactions */
+	mutex_lock(&device_node->tsi_dev->lock);
+	/* Read TSI Status register */
+	ret = regmap_read(device_node->tsi_dev->regmap, TSI_STATUS_REG, &status);
+	mutex_unlock(&device_node->tsi_dev->lock);
+
+	if (ret) {
+		dev_warn(dev, "Failed to read TSI status register (err: %d)\n", ret);
+		return ret;
+	}
+
+	if (!status) {
+		/* No alert status - normal condition */
+		return ret;
+	}
+
+	ret = apml_alertl_get_device_identity(device_node->tsi_dev->client,
+					      device_node->tsi_dev->i3cdev,
+					      device_node->tsi_dev->dev_static_addr,
+					      &addr, &bus_num, &pid);
+	if (ret)
+		return ret;
+
+	if (!addr)
+		return -EINVAL;
+
+	/* Send uevent for temperature alert (shifted to avoid RAS bit overlap) */
+	ret = send_uevent(addr, bus_num, status << TSI_STATUS_SHIFT, pid, dev);
+	if (ret) {
+		dev_info(dev, "Failed to send uevent for temp alert (device: 0x%x, err: %d)\n",
+			 addr, ret);
+	}
+	return ret; /* Alert was processed */
+}
+
+/*
+ * TODO: Drop once Alert_L probes as an auxiliary driver; alert handling
+ * then runs in the auxiliary bind/unbind path for each SB-RMI/SB-TSI device.
+ */
+static void handle_apml_alerts(struct device *dev)
+{
+	struct apml_device_node *device_node, *tmp;
+	int ret;
+
+	mutex_lock(&apml_devices_lock);
+	list_for_each_entry_safe(device_node, tmp, &apml_devices, apml_dev_list) {
+		/* Get a safe reference to the device node */
+		if (!kref_get_unless_zero(&device_node->refcount))
+			continue;
+
+		/* Device-specific alert processing */
+		switch (device_node->dev_type) {
+		case APML_RMI_DEVICE:
+			ret = handle_rmi_device_alert(device_node, dev);
+			break;
+		case APML_TSI_DEVICE:
+			ret = handle_tsi_device_alert(device_node, dev);
+			break;
+		default:
+			dev_warn(dev, "Unknown device type: %d\n", device_node->dev_type);
+			ret = -EINVAL;
+			break;
+		}
+
+		if (ret) {
+			dev_dbg(dev, "Alert processing failed for device type %d: %d\n",
+				device_node->dev_type, ret);
+		}
+		/* Always release the reference */
+		apml_put_device_node(device_node);
+	}
+	mutex_unlock(&apml_devices_lock);
+}
+
+/* Handles Alert_L interrupts by delegating to unified alert handler */
+static irqreturn_t alert_l_irq_thread_handler(int irq, void *dev_id)
+{
+	struct device *dev = (struct device *)dev_id;
+
+	handle_apml_alerts(dev);
+
+	return IRQ_HANDLED;
 }
 
 static int apml_alertl_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct device_node *dnode = dev->of_node;
-	struct apml_sbrmi_device **rmi_dev;
+	struct device_node *np = dev->of_node;
 	struct apml_alertl_data *oob_alert;
 	struct gpio_desc *alertl_gpiod;
-	u32 irq_num;
-	u32 num_dev = 0;
-	int ret = 0;
-	int i = 0;
+	int ret;
+	u8 socket_num = 0;
+	char *irq_name;
 
-	/* Allocate memory to oob_alert_data structure */
-	oob_alert = devm_kzalloc(dev, sizeof(struct apml_alertl_data),
-				 GFP_KERNEL);
+	oob_alert = devm_kzalloc(dev, sizeof(*oob_alert), GFP_KERNEL);
 	if (!oob_alert)
 		return -ENOMEM;
-	/* identify the number of devices associated with each alert */
-	num_dev = of_property_count_elems_of_size(dnode, "sbrmi",
-						  sizeof(phandle));
-	oob_alert->num_of_rmi_devs = num_dev;
 
-	/* Allocate memory as per the number of rmi devices */
-	rmi_dev = devm_kzalloc(dev, num_dev * sizeof(struct apml_sbrmi_device), GFP_KERNEL);
-	if (!rmi_dev)
-		return -ENOMEM;
-	oob_alert->rmi_dev = rmi_dev;
+	oob_alert->dev = dev;
 
-	/*
-	 * For each of the Alerts get the device associated
-	 * Currently the ALert_L driver identification is only supported
-	 * over I3C. We can add property in dts to identify the bus type
-	 */
-
-	for (i = 0; i < num_dev; i++) {
-		rmi_dev[i] = get_apml_dev_byphandle(pdev->dev.of_node, "sbrmi", i);
-		if (!rmi_dev[i]) {
-			pr_err("Error getting APML SBRMI device. Exiting\n");
-			return -EINVAL;
-		}
-	}
-
-	/* Get the alert_l gpios, irq_number for the GPIO and register ISR*/
+	/* Get the alert_l gpio */
 	alertl_gpiod = devm_gpiod_get(dev, NULL, GPIOD_IN);
-	if (IS_ERR(alertl_gpiod)) {
-		dev_err(&pdev->dev, "Unable to retrieve gpio\n");
+	if (IS_ERR(alertl_gpiod))
 		return PTR_ERR(alertl_gpiod);
-	}
 
+	/* Get IRQ number from GPIO */
 	ret = gpiod_to_irq(alertl_gpiod);
 	if (ret < 0) {
-		dev_err(dev, "No corresponding irq for gpio error: %d\n", ret);
-		return ret;
-	}
-	irq_num = ret;
-	pr_debug("Register IRQ:%u\n", irq_num);
-	ret = devm_request_threaded_irq(dev, irq_num,
-					NULL,
-					(void *)alert_l_irq_thread_handler,
-					IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
-					"apml_irq", oob_alert);
-	if (ret) {
-		pr_err("Cannot register IRQ:%u\n", irq_num);
+		dev_err(dev,
+			"APML AlertL: No corresponding irq for gpio error: %d\n",
+			ret);
 		return ret;
 	}
 
-	/* Set the platform data to pdev */
-	platform_set_drvdata(pdev, oob_alert);
+	oob_alert->irq_num = ret;
 
-	/*
-	 * Create a sys entry to register user application PID
-	 * Only one debugfs entry is created for all apml alerts on
-	 * the platform (the idea of debugfs entry is only for RAS consumers)
-	 */
-#ifdef CONFIG_DEBUG_FS
-	pr_debug("Creating debugfs files");
-	if (!amd_apml) {
-		amd_apml = debugfs_create_dir("apml_alertl", NULL);
-		if (IS_ERR_OR_NULL(amd_apml))
+	/* Try to read socket-num property from DTS */
+	ret = of_property_read_u8(np, "socket-num", &socket_num);
+	if (!ret) {
+		irq_name = devm_kasprintf(dev, GFP_KERNEL, "apml_irq%u", socket_num);
+		if (!irq_name)
 			return -ENOMEM;
-		debugfs_create_file("ras_fatal_pid", 0600, amd_apml, oob_alert, &proc_pid_fops);
+	} else {
+		irq_name = devm_kstrdup(dev, "apml_irq", GFP_KERNEL);
+		if (!irq_name)
+			return -ENOMEM;
 	}
-#endif
+	dev_info(dev, "APML Alert_L for socket %u, IRQ %u\n", socket_num, oob_alert->irq_num);
+	/* Register threaded IRQ handler */
+	ret = devm_request_threaded_irq(dev, oob_alert->irq_num,
+					NULL,
+					alert_l_irq_thread_handler,
+					IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+					irq_name,
+					dev);
+	if (ret) {
+		dev_err(dev, "Cannot register IRQ:%u\n", oob_alert->irq_num);
+		return ret;
+	}
+
+	platform_set_drvdata(pdev, oob_alert);
 	return 0;
 }
 
-static int alert_remove(struct platform_device *pdev)
+static int apml_alertl_remove(struct platform_device *pdev)
 {
-#ifdef CONFIG_DEBUG_FS
-	if (amd_apml) {
-		debugfs_remove_recursive(amd_apml);
-		amd_apml = NULL;
+	struct apml_alertl_data *alertl_data = platform_get_drvdata(pdev);
+
+	if (alertl_data) {
+		/* Ensure any running interrupt handlers complete */
+		synchronize_irq(alertl_data->irq_num);
 	}
-#endif
+
 	return 0;
 }
 
 static const struct of_device_id apml_alertl_dt_ids[] = {
-	{ .compatible = "apml-alertl", },
+	{.compatible = "apml-alertl", },
 	{},
 };
 MODULE_DEVICE_TABLE(of, apml_alertl_dt_ids);
@@ -269,11 +382,13 @@ static struct platform_driver apml_alertl_driver = {
 		.of_match_table = of_match_ptr(apml_alertl_dt_ids),
 	},
 	.probe		= apml_alertl_probe,
-	.remove		= alert_remove,
+	.remove		= apml_alertl_remove,
 };
 
 module_platform_driver(apml_alertl_driver);
+
 MODULE_AUTHOR("Akshay Gupta <akshay.gupta@amd.com>");
+MODULE_AUTHOR("Sathya Priya Kumar <sathyapriya.k@amd.com>");
 MODULE_AUTHOR("Naveenkrishna Chatradhi <naveenkrishna.chatradhi@amd.com>");
 MODULE_DESCRIPTION("AMD APML ALERT_L Driver");
 MODULE_LICENSE("GPL");
