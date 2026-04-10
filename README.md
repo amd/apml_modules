@@ -1,5 +1,5 @@
 .. SPDX-License-Identifier: GPL-2.0
-# amd apml modules (apml_sbtsi, apml_sbrmi and apml_alert)
+# amd apml modules (apml_sbtsi, apml_sbrmi and apml_alertl)
 
 amd-apml: APML interface drivers for BMC
 
@@ -161,8 +161,8 @@ To clean the kernel module build directory:
 #> make clean
 
 
-Note: There is a fix required in the upstream linux kerenl header to handle the i3c_dev.
-the patch is kept in patches/ folder of this repo.
+Note: There is a fix required in the upstream linux kerenl header to handle
+ the i3c_dev. the patch is kept in patches/ folder of this repo.
 
 Loading
 -------
@@ -180,9 +180,10 @@ installed:
 
 APML_ALERTL
 ===========
-Disclaimer: apml_alert module is currently experimental and may change in the future
+Disclaimer: The apml_alertl module is currently experimental and may change in the future.
 
-EPYC processors from AMD provide APML ALERT_L for BMC users to monitor events.
+EPYC processors from AMD provide APML ALERT_L for BMC users to monitor
+events.
 
    |-------------------|
    | socket       SBRMI|==== i2c/i3c bus
@@ -197,30 +198,72 @@ APML Alert_L is asserted in multiple events:
 4) Set by firmware to indicate the completion of a mailbox operation
 5) Temperature Alert
 
-apml_alertl module defines an interface for user space to register their PID for
-notifications and an ISR which identifies the source of the interrupt and signals
-user space application.
+Driver Implementation Design Update
+-----------------------------------
 
-apml_alertl module depends on apml_sbrmi module for identifying the source.
+The driver has been redesigned to provide a more robust and standardized
+interface for user-space alert handling, offering richer context compared
+to the previous signal-based approach.
+
+
+When Alert_L asserts, **apml_alertl** runs its threaded interrupt handler,
+locks the global **apml_devices** list (owned by **apml_common**), and
+visits every registered node. For each **SBRMI** entry it reads the RAS
+status register; for each **SBTSI** entry it reads the temperature alert
+status register.
+
+**apml_sbrmi** and **apml_sbtsi** register with **apml_common** during their
+probe paths; **apml_alertl** finds peers only through that registry.
+
+**Planned upstream binding:** the global **apml_devices** registry is interim.
+Alert_L will probe as an auxiliary driver; alert handling will then run in
+auxiliary bind/unbind for each SB-RMI/SB-TSI device instead of a list walk.
+
+User space is notified via **kobject_uevent_env()** (**KOBJ_CHANGE**), not
+signals or debugfs.
+
+apml_alertl depends on **apml_common.ko** being loaded. SBRMI/SBTSI devices
+must be registered (typically by loading **apml_sbrmi.ko** and
+**apml_sbtsi.ko**) before alerts can be attributed to a concrete device.
+
+Key Changes
+-----------
+
+This update aims to enhance the robustness and flexibility of alert handling:
+
+ - Improved Interface: The new design enhances alert handling by providing
+   detailed context and improving interaction with user-space applications.
+ - I3C Hot-Join Support: The new design will support hot-join for I3C
+   devices, allowing for dynamic device connections.
+ - Legacy Support: The previous implementation is available on the
+   alertl-legacy branch for those who need it, though this branch will be
+   phased out over time.
 
 DTS node definition for Alert_L module
 --------------------------------------
 
 required:
-  - compatible
+  - compatible: "apml-alertl"
   - status
-  - gpios: GPIO associated with the Alert_L of the socket
-  - sbrmi: Array of RMI devices on the system
+  - gpios: GPIO line wired to Alert_L for this socket (consumer binding)
+
+optional:
+  - socket-num: 8-bit value (`/bits/ 8` encoding in device tree); if present,
+    the threaded IRQ is named **apml_irq** with that number as a suffix
+    (e.g. **apml_irq0**). If omitted, the IRQ name is **apml_irq** (useful on
+    multi-socket systems when you need distinct /proc/interrupts entries per
+    socket). Use `/bits/ 8 <N>`, the driver reads this property with
+    `of_property_read_u8()`.
 
 Example:
 
 / {
 	/* Alert_L associated with socket 0 */
-	 alertl_sock0 {
+	alertl_sock0 {
 		compatible = "apml-alertl";
 		status = "okay";
 		gpios = <&gpio0 ASPEED_GPIO(I, 7) GPIO_ACTIVE_LOW>;
-		sbrmi = <&sbrmi_p0_1 &sbrmi_p1_1>;
+		socket-num = /bits/ 8 <0>;
 	};
 
 	/* Alert_L associated with socket 1 */
@@ -228,52 +271,59 @@ Example:
 		compatible = "apml-alertl";
 		status = "okay";
 		gpios = <&gpio0 ASPEED_GPIO(U, 4) GPIO_ACTIVE_LOW>;
-		sbrmi = <&sbrmi_p1_1 &sbrmi_p0_1>;
+		socket-num = /bits/ 8 <1>;
 	};
 };
 
 Loading
 -------
-To install apml_alertl driver builtin as module, user can use the modprobe or insmod
-command
+Load **apml_common** and the bus drivers so devices register, then
+**apml_alertl**:
 
+#> sudo modprobe apml_common
+#> sudo modprobe apml_sbrmi apml_sbtsi
 #> sudo modprobe apml_alertl
 
-#> sudo insmod ./apml_alertl.ko
+Or with insmod from a build tree (order matters):
 
-Note: Dependency on apml_sbrmi.ko module
+#> sudo insmod ./apml_common.ko
+#> sudo insmod ./apml_sbrmi.ko
+#> sudo insmod ./apml_sbtsi.ko
+#> sudo insmod ./apml_alertl.ko
 
 Unloading
 ---------
 
+Unload in reverse dependency order, e.g.:
+
 #> sudo rmmod apml_alertl
+#> sudo rmmod apml_sbtsi apml_sbrmi
+#> sudo rmmod apml_common
 
-If the driver is inbuilt can be removed/inserted by running bind/unbind command.
+If the driver is built in, the platform device can be unbound/rebound under:
 
-#> cd /sys/bus/platform/drivers/alertl
-#> echo alertl_rmi# > unbind/bind
+#> cd /sys/bus/platform/drivers/apml_alertl
+#> echo <device-name> > unbind
+#> echo <device-name> > bind
 
-USAGE
------
+USAGE (uevents)
+---------------
 
-User need to register the PID of the process with the apml_alertl module,
-by writing the PID to the debugfs entry, /sys/kernel/debug/apml_alert/ras_fatal_pid
+Applications should listen for **change** uevents on the Alert_L platform
+device (for example via **udev** rules or **libudev**), not for POSIX signals.
 
-#> echo $PID > /sys/kernel/debug/apml_alert/$alert_source
+Each notification includes these environment variables (see **apml_alertl.c**):
 
-User application needs to wait for the signal from the apml_alertl module.
+| Variable   | Meaning |
+|------------|---------|
+| SOURCE     | For **RMI** (RAS): RAS status register (**0x4C**). For **TSI**
+|            | (temperature): TSI status left-shifted 24 bits. |
+| BUS_NUM    | Linux bus number (**I3C** bus **id** or **I2C** adapter
+|            | **nr**). |
+| PID        | **I3C** provisioned ID (**64-bit** hex); **0** for **I2C**
+|            | devices. |
+| ADDRESS    | **I3C** static address or **I2C** client address (**hex**). |
 
-Signal from module carries a "struct kernel_siginfo" with following data
-
-- si_int: is filled with the event data
-  [15:0]  = ras_status register
-  [23:16] = rmi static address
-
-- si_signo: 44
-
-Currently the kernel driver send signal only in event, RAS status register bit set.
-
-- In case of RAS fatal error the status register BIT(1) will
-  set, and ISR clears the bit to avoid interfere with alerts during the ISR.
-
-Future versions of the driver may include support for other events mentioned above.
+For RAS alerts, the driver clears the RAS status register and writes
+**RAS_ALERT_ASYNC** to the RMI status register (**0x2**) as part of servicing
+the event.
