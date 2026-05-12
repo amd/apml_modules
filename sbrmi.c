@@ -622,8 +622,14 @@ static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 
 	dev_set_drvdata(dev, (void *)rmi_dev);
 
-	/* Need to verify for the static address for i3cdev */
-	rmi_dev->dev_static_addr = i3cdev->desc->info.static_addr;
+	/*
+	 * I3C dynamic address (post-DAA); fall back to static if
+	 * not yet assigned
+	 */
+	if (i3cdev->desc->info.dyn_addr)
+		rmi_dev->dev_static_addr = i3cdev->desc->info.dyn_addr;
+	else
+		rmi_dev->dev_static_addr = i3cdev->desc->info.static_addr;
 
 	switch (rmi_dev->dev_static_addr) {
 	case 0x3c:
