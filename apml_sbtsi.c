@@ -388,8 +388,14 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 
 	dev_set_drvdata(dev, (void *)tsi_dev);
 
-	/* Need to verify for the static address for i3cdev */
-	tsi_dev->dev_static_addr = i3cdev->desc->info.static_addr;
+	/*
+	 * I3C dynamic address (post-DAA); fall back to static
+	 * if not yet assigned
+	 */
+	if (i3cdev->desc->info.dyn_addr)
+		tsi_dev->dev_static_addr = i3cdev->desc->info.dyn_addr;
+	else
+		tsi_dev->dev_static_addr = i3cdev->desc->info.static_addr;
 
 	switch (tsi_dev->dev_static_addr) {
 	case 0x4c:
