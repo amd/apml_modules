@@ -2,7 +2,7 @@
 /*
  * apml_sbtsi.c - hwmon driver for a SBI Temperature Sensor Interface (SB-TSI)
  *                compliant AMD SoC temperature device.
- * 		   Also register to misc driver with an IOCTL.
+ *                Also register to misc driver with an IOCTL.
  *
  * Copyright (c) 2020, Google Inc.
  * Copyright (c) 2020, Kun Yi <kunyi@google.com>
@@ -282,7 +282,7 @@ static const struct hwmon_chip_info sbtsi_chip_info = {
 
 static long sbtsi_ioctl(struct file *fp, unsigned int cmd, unsigned long arg)
 {
-	int __user *arguser = (int  __user *)arg;
+	int __user *arguser = (int __user *)arg;
 	struct apml_message msg = { 0 };
 	struct apml_sbtsi_device *tsi_dev;
 	int ret;
@@ -391,7 +391,7 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 	/* Need to verify for the static address for i3cdev */
 	tsi_dev->dev_static_addr = i3cdev->desc->info.static_addr;
 
-	switch(tsi_dev->dev_static_addr) {
+	switch (tsi_dev->dev_static_addr) {
 	case 0x4c:
 		name = devm_kasprintf(dev, GFP_KERNEL, "sbtsi_%s", "0.0");
 		break;
@@ -444,7 +444,7 @@ static int sbtsi_i2c_probe(struct i2c_client *client)
 
 	tsi_dev->dev_static_addr = client->addr;
 
-	switch(tsi_dev->dev_static_addr) {
+	switch (tsi_dev->dev_static_addr) {
 	case 0x4c:
 		name = devm_kasprintf(dev, GFP_KERNEL, "sbtsi_%s", "0.0");
 		break;
