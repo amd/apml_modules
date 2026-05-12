@@ -464,7 +464,7 @@ static int sbrmi_i2c_probe(struct i2c_client *client)
 
 	rmi_dev->dev_static_addr = client->addr;
 
-	switch(rmi_dev->dev_static_addr) {
+	switch (rmi_dev->dev_static_addr) {
 	case 0x3c:
 		name = devm_kasprintf(dev, GFP_KERNEL, "sbrmi_%s", "0.0");
 		break;
@@ -625,7 +625,7 @@ static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 	/* Need to verify for the static address for i3cdev */
 	rmi_dev->dev_static_addr = i3cdev->desc->info.static_addr;
 
-	switch(rmi_dev->dev_static_addr) {
+	switch (rmi_dev->dev_static_addr) {
 	case 0x3c:
 		name = devm_kasprintf(dev, GFP_KERNEL, "sbrmi_%s", "0.0");
 		break;

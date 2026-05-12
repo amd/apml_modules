@@ -321,7 +321,7 @@ int rmi_mca_msr_read(struct apml_sbrmi_device *rmi_dev,
 			return ret;
 	}
 
-	switch(rmi_dev->rev) {
+	switch (rmi_dev->rev) {
 	/* MCA MSR protocol for REV 0x10 is not supported*/
 	case 0x10:
 		return -EOPNOTSUPP;
