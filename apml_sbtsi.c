@@ -64,11 +64,11 @@ struct apml_sbtsi_device {
 	struct miscdevice sbtsi_misc_dev;
 	struct regmap *regmap;
 	struct mutex lock;
-	u8 dev_static_addr;
 	atomic_t in_progress;
 	atomic_t no_new_trans;
 	struct completion misc_fops_done;
-} __packed;
+	u8 dev_static_addr;
+};
 
 /*
  * From SB-TSI spec: CPU temperature readings and limit registers encode the
