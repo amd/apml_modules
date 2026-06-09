@@ -46,7 +46,93 @@ current temperature, managing max and min thresholds.
 
 apml_sbrmi module registers hwmon sensors for monitoring
 power_cap_max, current power consumption and managing
-power_cap.
+power_cap. It also reports per-UMC DIMM thermal sensor
+temperatures (TS0 and TS1) when platform firmware supports
+mailbox command 0x48 (SBRMI_READ_DIMM_THERMAL_SENSOR).
+
+
+DIMM Thermal Sensors (apml_sbrmi)
+=================================
+
+Each populated UMC/DDRPHY instance exposes two on-DIMM thermal
+sensors, TS0 and TS1. The driver reads them via the SB-RMI mailbox
+and publishes up to 32 hwmon temperature channels per socket:
+
+  - Channels  0-15: TS0 for UMC instances 0-15
+  - Channels 16-31: TS1 for UMC instances 0-15
+
+Each channel exposes temp(N+1)_input (milli-degrees Celsius) and
+temp(N+1)_label in sysfs, where N is the 0-based hwmon channel index.
+Labels follow the pattern DIMM_TS0_UMCn and DIMM_TS1_UMCn (n = 0..15).
+Only channels corresponding to populated UMC instances are visible;
+unpopulated channels return -EINVAL.
+
+Mode 1 DIMM_ADDRESS encoding (mailbox data byte):
+
+  - Bit[7]:   1 (Mode 1)
+  - Bit[6]:   TS select (0 = TS0, 1 = TS1)
+  - Bit[3:0]: UMC/DDRPHY instance ID (0-15)
+
+When the optional dimm-ids device-tree property is omitted, the
+driver derives addresses using the legacy 0x80-based encoding for
+all 16 UMC instances (0x80/0xC0 for UMC0 TS0/TS1, 0x81/0xC1 for
+UMC1, and so on). When dimm-ids is present, each entry supplies
+the TS0 base address for one UMC in array order; the driver sets
+bit[6] to form the corresponding TS1 address (TS1 = TS0 | 0x40).
+
+DTS node definition for apml_sbrmi DIMM thermal sensors
+---------------------------------------------------------
+
+The apml_sbrmi node is probed as an I2C or I3C client depending on
+the platform bus wiring. See Documentation/amd,sbrmi.yaml for the
+full devicetree binding schema.
+
+required:
+  - compatible: must be "amd,sbrmi"
+  - reg: I2C slave address or I3C dynamic address
+
+optional:
+  - dimm-ids: array of TS0 mailbox addresses, one per populated UMC
+    instance (1..16 entries). Entry count sets how many UMC
+    instances expose TS0 and TS1 hwmon channels.
+
+examples:
+
+&i3c4 {
+	sbrmi_p0_sp8: sbrmi@0,2240000111A {
+		reg = <0x0 0x224 0x0000111A>;
+		assigned-address = <0x3c>;
+		/* Sixteen populated UMC instances; alternating TS0 layout */
+		dimm-ids = <0x80 0x90 0x81 0x91 0x82 0x92 0x83 0x93
+			    0x84 0x94 0x85 0x95 0x86 0x96 0x87 0x97>;
+	};
+};
+
+/* Eight populated UMC instances on a single socket */
+&i3c4 {
+	sbrmi@0,2240000111A {
+		reg = <0x0 0x224 0x0000111A>;
+		assigned-address = <0x3c>;
+		dimm-ids = <0x80 0x90 0x81 0x91 0x82 0x92 0x83 0x93>;
+	};
+};
+
+/* Legacy encoding: omit dimm-ids to use 0x80-based addresses */
+&i2c15 {
+	sbrmi@3c {
+		compatible = "amd,sbrmi";
+		reg = <0x3c>;
+	};
+};
+
+After probe, DIMM temperatures appear under the hwmon device. Each
+hwmon channel N (0-based) maps to temp(N+1)_input and temp(N+1)_label
+in sysfs, for example:
+
+#> cat /sys/class/hwmon/hwmonN/temp1_input    /* channel 0, DIMM_TS0_UMC0 */
+#> cat /sys/class/hwmon/hwmonN/temp1_label
+#> cat /sys/class/hwmon/hwmonN/temp17_input   /* channel 16, DIMM_TS1_UMC0 */
+#> cat /sys/class/hwmon/hwmonN/temp17_label
 
 
 Build and Install
