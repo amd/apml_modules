@@ -385,7 +385,7 @@ static int cpuid_datain_v10(struct apml_sbrmi_device *rmi_dev,
 				 CPUID_WR_DATA_LEN);
 
 	if (!rmi_dev->client)
-		return -ENODEV;
+		return -EOPNOTSUPP;
 
 	xfer[0].addr = rmi_dev->client->addr;
 	xfer[0].flags = 0;
