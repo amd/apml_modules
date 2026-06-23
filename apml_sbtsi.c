@@ -78,6 +78,7 @@ static inline int sbtsi_reg_to_mc(s32 integer, s32 decimal)
 	       (decimal >> SBTSI_DEC_OFFSET)) * SBTSI_STEP_INC;
 }
 
+#define PID_TSI_GENOA_TURIN	0x22400000001ULL
 /*
  * Inversely, given temperature in millidegree Celsius
  *   INT = (TEMP / 125) / 8
@@ -359,7 +360,7 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 	int ret;
 
 	if (!(I3C_PID_INSTANCE_ID(i3cdev->desc->info.pid) == 0 ||
-	    i3cdev->desc->info.pid == 0x22400000001))
+	    i3cdev->desc->info.pid == PID_TSI_GENOA_TURIN))
 		return -ENXIO;
 
 	regmap = devm_regmap_init_i3c(i3cdev, &sbtsi_i3c_regmap_config);
@@ -576,7 +577,9 @@ static void sbtsi_i2c_remove(struct i2c_client *client)
 }
 
 static const struct i3c_device_id sbtsi_i3c_id[] = {
-	I3C_DEVICE_EXTRA_INFO(0x112, 0, 0x1, NULL),
+	I3C_DEVICE_EXTRA_INFO(0x112, 0, 0x1, NULL), /* Genoa/Turin */
+	I3C_DEVICE_EXTRA_INFO(0x112, 0x0, 0x118, NULL), /* Socket:0, IOD:0 Venice */
+	I3C_DEVICE_EXTRA_INFO(0x112, 0x100, 0x118, NULL), /* Socket:1 IOD:0 Venice */
 	{}
 };
 MODULE_DEVICE_TABLE(i3c, sbtsi_i3c_id);
