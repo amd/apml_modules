@@ -53,6 +53,7 @@
 #define DIMM_CHANNELS_PER_TS	16
 #define SBRMI_MAX_DIMMS		DIMM_CHANNELS_PER_TS
 #define SBRMI_NUM_DIMM_CHANNELS	(DIMM_CHANNELS_PER_TS * 2) /* TS0 + TS1 */
+#define PID_RMI_GENOA_TURIN	0x22400000002ULL
 /*
  * DIMM_ADDR() - Encode a hwmon channel into a Mode 1 DIMM_ADDRESS byte
  *   Bit[7]   : 1        - Mode 1
@@ -866,7 +867,7 @@ static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 	int ret;
 
 	if (!(I3C_PID_INSTANCE_ID(i3cdev->desc->info.pid) == 1 ||
-	    i3cdev->desc->info.pid == 0x22400000002))
+	    i3cdev->desc->info.pid == PID_RMI_GENOA_TURIN))
 		return -ENXIO;
 
 	rmi_dev = sbrmi_dev_alloc(dev);
@@ -1027,7 +1028,9 @@ static const struct of_device_id __maybe_unused sbrmi_of_match[] = {
 MODULE_DEVICE_TABLE(of, sbrmi_of_match);
 
 static const struct i3c_device_id sbrmi_i3c_id[] = {
-	I3C_DEVICE_EXTRA_INFO(0x112, 0x0, 0x2, NULL),
+	I3C_DEVICE_EXTRA_INFO(0x112, 0x0, 0x2, NULL), /* Genoa/Turin */
+	I3C_DEVICE_EXTRA_INFO(0x112, 0x0, 0x118, NULL), /* Socket:0, IOD:0 Venice*/
+	I3C_DEVICE_EXTRA_INFO(0x112, 0x100, 0x118, NULL), /* Socket:1 IOD:0 Venice */
 	{}
 };
 MODULE_DEVICE_TABLE(i3c, sbrmi_i3c_id);
