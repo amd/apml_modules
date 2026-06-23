@@ -725,9 +725,8 @@ static int sbrmi_i2c_probe(struct i2c_client *client)
 							 rmi_dev,
 							 &sbrmi_chip_info,
 							 NULL);
-
-	if (!hwmon_dev)
-		return PTR_ERR_OR_ZERO(hwmon_dev);
+	if (IS_ERR(hwmon_dev))
+		return PTR_ERR(hwmon_dev);
 
 	init_completion(&rmi_dev->misc_fops_done);
 	ret = create_misc_rmi_device(rmi_dev, dev);
@@ -908,9 +907,8 @@ static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 
 	hwmon_dev = devm_hwmon_device_register_with_info(dev, name, rmi_dev,
 							 &sbrmi_chip_info, NULL);
-
-	if (!hwmon_dev)
-		return PTR_ERR_OR_ZERO(hwmon_dev);
+	if (IS_ERR(hwmon_dev))
+		return PTR_ERR(hwmon_dev);
 
 	init_completion(&rmi_dev->misc_fops_done);
 	ret = create_misc_rmi_device(rmi_dev, dev);
