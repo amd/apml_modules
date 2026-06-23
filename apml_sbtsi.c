@@ -404,9 +404,8 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 
 	hwmon_dev = devm_hwmon_device_register_with_info(dev, name, tsi_dev,
 							 &sbtsi_chip_info, NULL);
-
-	if (!hwmon_dev)
-		return PTR_ERR_OR_ZERO(hwmon_dev);
+	if (IS_ERR(hwmon_dev))
+		return PTR_ERR(hwmon_dev);
 
 	init_completion(&tsi_dev->misc_fops_done);
 	ret = create_misc_tsi_device(tsi_dev, dev);
@@ -474,9 +473,8 @@ static int sbtsi_i2c_probe(struct i2c_client *client)
 							 tsi_dev,
 							 &sbtsi_chip_info,
 							 NULL);
-
-	if (!hwmon_dev)
-		return PTR_ERR_OR_ZERO(hwmon_dev);
+	if (IS_ERR(hwmon_dev))
+		return PTR_ERR(hwmon_dev);
 
 	init_completion(&tsi_dev->misc_fops_done);
 	ret = create_misc_tsi_device(tsi_dev, dev);
