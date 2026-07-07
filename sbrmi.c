@@ -546,18 +546,25 @@ static int sbrmi_open(struct inode *inode, struct file *filp)
 	struct miscdevice *mdev = filp->private_data;
 	struct apml_sbrmi_device *rmi_dev = container_of(mdev, struct apml_sbrmi_device,
 							 sbrmi_misc_dev);
-	int ret = 0;
+	int ret;
 
 	if (!rmi_dev)
 		return -ENODEV;
+
+	ret = sbrmi_prepare_lock(rmi_dev);
+	if (ret)
+		return ret;
 
 	if (!rmi_dev->regmap) {
 		ret = configure_regmap(rmi_dev);
 		if (ret < 0) {
 			pr_err("regmap configuration failed with return value:%d in misc dev open\n", ret);
+			sbrmi_prepare_unlock(rmi_dev);
 			return ret;
 		}
 	}
+
+	sbrmi_prepare_unlock(rmi_dev);
 	filp->private_data = rmi_dev;
 	return 0;
 }
