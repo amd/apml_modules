@@ -162,23 +162,19 @@ static int sbrmi_read(struct device *dev, enum hwmon_sensor_types type,
 	if (type != hwmon_power && type != hwmon_temp)
 		return -EINVAL;
 
-	/*
-	 * If device remove/unbind is called do not allow new transaction
-	 */
-	if (atomic_read(&rmi_dev->no_new_trans))
-		return -EBUSY;
+	ret = sbrmi_prepare_lock(rmi_dev);
+	if (ret)
+		return ret;
+
 	/* Configure regmap if not configured yet */
 	if (!rmi_dev->regmap) {
 		ret = configure_regmap(rmi_dev);
 		if (ret < 0) {
 			pr_err("regmap configuration failed with return value:%d in hwmon read ops\n", ret);
+			sbrmi_prepare_unlock(rmi_dev);
 			return ret;
 		}
 	}
-
-	ret = sbrmi_prepare_lock(rmi_dev);
-	if (ret)
-		return ret;
 
 	msg.data_in.reg_in[RD_FLAG_INDEX] = 1;
 
@@ -340,19 +336,6 @@ static int sbrmi_write(struct device *dev, enum hwmon_sensor_types type,
 		return -EINVAL;
 
 	/*
-	 * If device remove/unbind is called do not allow new transaction
-	 */
-	if (atomic_read(&rmi_dev->no_new_trans))
-		return -EBUSY;
-	/* Configure regmap if not configured yet */
-	if (!rmi_dev->regmap) {
-		ret = configure_regmap(rmi_dev);
-		if (ret < 0) {
-			pr_err("regmap configuration failed with return value:%d in hwmon write ops\n", ret);
-			return ret;
-		}
-	}
-	/*
 	 * hwmon power attributes are in microWatt
 	 * mailbox read/write is in mWatt
 	 */
@@ -367,6 +350,16 @@ static int sbrmi_write(struct device *dev, enum hwmon_sensor_types type,
 	ret = sbrmi_prepare_lock(rmi_dev);
 	if (ret)
 		return ret;
+
+	/* Configure regmap if not configured yet */
+	if (!rmi_dev->regmap) {
+		ret = configure_regmap(rmi_dev);
+		if (ret < 0) {
+			pr_err("regmap configuration failed with return value:%d in hwmon write ops\n", ret);
+			sbrmi_prepare_unlock(rmi_dev);
+			return ret;
+		}
+	}
 
 	ret = rmi_mailbox_xfer(rmi_dev, &msg);
 
