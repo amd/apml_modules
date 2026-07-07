@@ -718,7 +718,8 @@ static int sbrmi_i2c_probe(struct i2c_client *client)
 		name = devm_kasprintf(dev, GFP_KERNEL, "sbrmi_%s", "1.0");
 		break;
 	default:
-		name = devm_kasprintf(dev, GFP_KERNEL, "sbrmi_");
+		name = devm_kasprintf(dev, GFP_KERNEL, "sbrmi_%x",
+				      rmi_dev->dev_static_addr);
 		break;
 	}
 
@@ -902,7 +903,8 @@ static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 		name = devm_kasprintf(dev, GFP_KERNEL, "sbrmi_%s", "1.0");
 		break;
 	default:
-		name = devm_kasprintf(dev, GFP_KERNEL, "sbrmi_");
+		name = devm_kasprintf(dev, GFP_KERNEL, "sbrmi_%x",
+				      rmi_dev->dev_static_addr);
 		break;
 	}
 
