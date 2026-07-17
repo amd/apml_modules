@@ -399,7 +399,8 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 		name = devm_kasprintf(dev, GFP_KERNEL, "sbtsi_%s", "1.0");
 		break;
 	default:
-		name = devm_kasprintf(dev, GFP_KERNEL, "sbtsi_");
+		name = devm_kasprintf(dev, GFP_KERNEL, "sbtsi_%x",
+				      tsi_dev->dev_static_addr);
 		break;
 	}
 
@@ -466,7 +467,8 @@ static int sbtsi_i2c_probe(struct i2c_client *client)
 		name = devm_kasprintf(dev, GFP_KERNEL, "sbtsi_%s", "1.0");
 		break;
 	default:
-		name = devm_kasprintf(dev, GFP_KERNEL, "sbtsi_");
+		name = devm_kasprintf(dev, GFP_KERNEL, "sbtsi_%x",
+				      tsi_dev->dev_static_addr);
 		break;
 	}
 
