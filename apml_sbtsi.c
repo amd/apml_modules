@@ -151,10 +151,12 @@ static int sbtsi_read(struct device *dev, enum hwmon_sensor_types type,
 
 		if (cfg & BIT(SBTSI_CONFIG_READ_ORDER_SHIFT)) {
 			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_DEC, &temp_dec);
-			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_INT, &temp_int);
+			if (!ret)
+				ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_INT, &temp_int);
 		} else {
 			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_INT, &temp_int);
-			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_DEC, &temp_dec);
+			if (!ret)
+				ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_DEC, &temp_dec);
 		}
 
 		sbtsi_prepare_unlock(tsi_dev);
@@ -165,7 +167,8 @@ static int sbtsi_read(struct device *dev, enum hwmon_sensor_types type,
 			return ret;
 
 		ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_HIGH_INT, &temp_int);
-		ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_HIGH_DEC, &temp_dec);
+		if (!ret)
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_HIGH_DEC, &temp_dec);
 
 		sbtsi_prepare_unlock(tsi_dev);
 		break;
@@ -175,7 +178,8 @@ static int sbtsi_read(struct device *dev, enum hwmon_sensor_types type,
 			return ret;
 
 		ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_LOW_INT, &temp_int);
-		ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_LOW_DEC, &temp_dec);
+		if (!ret)
+			ret = regmap_read(tsi_dev->regmap, SBTSI_REG_TEMP_LOW_DEC, &temp_dec);
 
 		sbtsi_prepare_unlock(tsi_dev);
 		break;
