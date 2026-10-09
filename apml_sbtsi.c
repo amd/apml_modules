@@ -364,7 +364,7 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 	int ret;
 
 	if (!(I3C_PID_INSTANCE_ID(i3cdev->desc->info.pid) == 0 ||
-	    i3cdev->desc->info.pid == PID_TSI_GENOA_TURIN))
+	      i3cdev->desc->info.pid == PID_TSI_GENOA_TURIN))
 		return -ENXIO;
 
 	regmap = devm_regmap_init_i3c(i3cdev, &sbtsi_i3c_regmap_config);
