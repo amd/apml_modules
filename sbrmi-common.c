@@ -251,7 +251,7 @@ static int msr_datain_v20(struct apml_sbrmi_device *rmi_dev,
 }
 
 static int msr_datain_v21(struct apml_sbrmi_device *rmi_dev,
-				struct apml_message *msg)
+			  struct apml_message *msg)
 {
 	struct cpu_msr_indata_v21 input = {0};
 	int ret;

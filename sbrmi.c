@@ -30,7 +30,6 @@
 /* Try 2 byte address size before switching to 1 byte */
 #define MAX_RETRY	5
 
-
 /* SBRMI REVISION REG */
 #define SBRMI_REV	0x0
 
@@ -590,12 +589,14 @@ static int create_misc_rmi_device(struct apml_sbrmi_device *rmi_dev,
 	int ret;
 
 	rmi_dev->sbrmi_misc_dev.name		= devm_kasprintf(dev, GFP_KERNEL,
-						  "sbrmi-%x", rmi_dev->dev_static_addr);
+								 "sbrmi-%x",
+								 rmi_dev->dev_static_addr);
 	rmi_dev->sbrmi_misc_dev.minor		= MISC_DYNAMIC_MINOR;
 	rmi_dev->sbrmi_misc_dev.fops		= &sbrmi_fops;
 	rmi_dev->sbrmi_misc_dev.parent		= dev;
 	rmi_dev->sbrmi_misc_dev.nodename	= devm_kasprintf(dev, GFP_KERNEL,
-						  "sbrmi-%x", rmi_dev->dev_static_addr);
+								 "sbrmi-%x",
+								 rmi_dev->dev_static_addr);
 	rmi_dev->sbrmi_misc_dev.mode		= 0600;
 
 	ret = misc_register(&rmi_dev->sbrmi_misc_dev);
@@ -651,7 +652,7 @@ static int sbrmi_i2c_identify_reg_addr_size(struct i2c_client *i2c, u32 *size, u
 
 	/*
 	 * Sending 1 byte address size in Turin cause unrecoverable error
-	 * Before trying to switch to 1 bytes, retry. 
+	 * Before trying to switch to 1 bytes, retry.
 	 */
 	for (i = 0; i < MAX_RETRY; i++) {
 		ret = sbrmi_i2c_reg_read(i2c, reg_size, rev);
