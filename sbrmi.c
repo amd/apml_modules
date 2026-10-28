@@ -591,12 +591,16 @@ static int create_misc_rmi_device(struct apml_sbrmi_device *rmi_dev,
 	rmi_dev->sbrmi_misc_dev.name		= devm_kasprintf(dev, GFP_KERNEL,
 								 "sbrmi-%x",
 								 rmi_dev->dev_static_addr);
+	if (!rmi_dev->sbrmi_misc_dev.name)
+		return -ENOMEM;
 	rmi_dev->sbrmi_misc_dev.minor		= MISC_DYNAMIC_MINOR;
 	rmi_dev->sbrmi_misc_dev.fops		= &sbrmi_fops;
 	rmi_dev->sbrmi_misc_dev.parent		= dev;
 	rmi_dev->sbrmi_misc_dev.nodename	= devm_kasprintf(dev, GFP_KERNEL,
 								 "sbrmi-%x",
 								 rmi_dev->dev_static_addr);
+	if (!rmi_dev->sbrmi_misc_dev.nodename)
+		return -ENOMEM;
 	rmi_dev->sbrmi_misc_dev.mode		= 0600;
 
 	ret = misc_register(&rmi_dev->sbrmi_misc_dev);
@@ -723,6 +727,8 @@ static int sbrmi_i2c_probe(struct i2c_client *client)
 				      rmi_dev->dev_static_addr);
 		break;
 	}
+	if (!name)
+		return -ENOMEM;
 
 	hwmon_dev = devm_hwmon_device_register_with_info(dev, name,
 							 rmi_dev,
@@ -908,6 +914,8 @@ static int sbrmi_i3c_probe(struct i3c_device *i3cdev)
 				      rmi_dev->dev_static_addr);
 		break;
 	}
+	if (!name)
+		return -ENOMEM;
 
 	hwmon_dev = devm_hwmon_device_register_with_info(dev, name, rmi_dev,
 							 &sbrmi_chip_info, NULL);
