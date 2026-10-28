@@ -17,6 +17,7 @@
 #include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/i2c.h>
+#include <linux/version.h>
 
 #include "apml_common.h"
 #include "apml_alertl.h"
@@ -358,7 +359,11 @@ static int apml_alertl_probe(struct platform_device *pdev)
 	return 0;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
 static int apml_alertl_remove(struct platform_device *pdev)
+#else
+static void apml_alertl_remove(struct platform_device *pdev)
+#endif
 {
 	struct apml_alertl_data *alertl_data = platform_get_drvdata(pdev);
 
@@ -366,8 +371,9 @@ static int apml_alertl_remove(struct platform_device *pdev)
 		/* Ensure any running interrupt handlers complete */
 		synchronize_irq(alertl_data->irq_num);
 	}
-
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
 	return 0;
+#endif
 }
 
 static const struct of_device_id apml_alertl_dt_ids[] = {
