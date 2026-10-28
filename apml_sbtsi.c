@@ -495,11 +495,15 @@ static int create_misc_tsi_device(struct apml_sbtsi_device *tsi_dev,
 
 	tsi_dev->sbtsi_misc_dev.name		= devm_kasprintf(dev, GFP_KERNEL,
 						  "sbtsi-%x", tsi_dev->dev_static_addr);
+	if (!tsi_dev->sbtsi_misc_dev.name)
+		return -ENOMEM;
 	tsi_dev->sbtsi_misc_dev.minor		= MISC_DYNAMIC_MINOR;
 	tsi_dev->sbtsi_misc_dev.fops		= &sbtsi_fops;
 	tsi_dev->sbtsi_misc_dev.parent		= dev;
 	tsi_dev->sbtsi_misc_dev.nodename	= devm_kasprintf(dev, GFP_KERNEL,
 						  "sbtsi-%x", tsi_dev->dev_static_addr);
+	if (!tsi_dev->sbtsi_misc_dev.nodename)
+		return -ENOMEM;
 	tsi_dev->sbtsi_misc_dev.mode		= 0600;
 
 	ret = misc_register(&tsi_dev->sbtsi_misc_dev);
@@ -567,6 +571,8 @@ static int sbtsi_i3c_probe(struct i3c_device *i3cdev)
 				      tsi_dev->dev_static_addr);
 		break;
 	}
+	if (!name)
+		return -ENOMEM;
 
 	hwmon_dev = devm_hwmon_device_register_with_info(dev, name, tsi_dev,
 							 &sbtsi_chip_info, NULL);
@@ -635,6 +641,8 @@ static int sbtsi_i2c_probe(struct i2c_client *client)
 				      tsi_dev->dev_static_addr);
 		break;
 	}
+	if (!name)
+		return -ENOMEM;
 
 	hwmon_dev = devm_hwmon_device_register_with_info(dev, name,
 							 tsi_dev,
